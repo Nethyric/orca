@@ -119,9 +119,12 @@ function candidates(alias) {
   const list = (v.upstreams || {})[alias] || [];
   const live = list.filter((u) => u && u.url && u.key && u.model && !(disabled.get(u.id || u.key) > Date.now()));
   if (!live.length) return list.slice(); // everything cooled down → try them all anyway
-  // rotate the starting point every minute so several keys share the load evenly
-  const start = Math.floor(Date.now() / 60000) % live.length;
-  return [...live.slice(start), ...live.slice(0, start)];
+  // Load-balance only between keys that serve the SAME model as the alias's primary entry (rotating start
+  // point every minute); entries with a different model are pure fallbacks and keep their order.
+  const primaryModel = live[0].model;
+  const primary = live.filter((u) => u.model === primaryModel), rest = live.filter((u) => u.model !== primaryModel);
+  const start = Math.floor(Date.now() / 60000) % primary.length;
+  return [...primary.slice(start), ...primary.slice(0, start), ...rest];
 }
 function markBad(u, status) {
   const id = u.id || u.key;

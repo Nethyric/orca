@@ -297,8 +297,10 @@ async function callModel(modelKey, messages, { emit, signal, useTools = true, te
         let emitted = false;
         try {
           const res = await streamOnce(cfg, messages, (d) => { emitted = true; emit('delta', d); }, signal, useTools, temperature);
-          if (i > 0) emit('status', { text: L().fallback(config.resolve(modelKey)?.label || modelKey, cfg.label), kind: 'fallback' });
-          return { ...res, used: order[i], label: cfg.label };
+          // label the answer with the model that actually produced it (a vault alias may fall back to another model)
+          const actual = vault.isVaultModel(logical) && u > 0 && cfg.model !== ups[0].model ? (config.allModels().find((m) => vault.isVaultModel(m) && expand(m)[0]?.model === cfg.model)?.label || cfg.label) : cfg.label;
+          if (i > 0 || actual !== cfg.label) emit('status', { text: L().fallback(config.resolve(modelKey)?.label || modelKey, actual), kind: 'fallback' });
+          return { ...res, used: order[i], label: actual };
         } catch (e) {
           if (signal?.aborted || e.name === 'AbortError') throw new Error('aborted');
           last = `${cfg.label}: ${e.message}`;
