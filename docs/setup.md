@@ -12,7 +12,7 @@
 
 1. Download `ORCA-Agent-<version>-win-x64.zip` from [Releases](https://github.com/Nethyric/orca/releases/latest).
 2. Verify (optional): compare the file's SHA-256 with the `SHA256SUMS` asset.
-3. Extract anywhere (e.g. `C:\Apps\ORCA`) and run `ORCA Agent.exe`. Nothing is installed system-wide; delete the folder to uninstall.
+3. Extract anywhere (e.g. `C:\Apps\ORCA`) and run `ORCA.exe`. Nothing is installed system-wide; delete the folder to uninstall.
 
 Windows SmartScreen may warn because the executable is not code-signed — choose *More info → Run anyway*.
 

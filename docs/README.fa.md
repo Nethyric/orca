@@ -18,7 +18,7 @@ ORCA یک ایجنت دسکتاپ است: کار را توضیح می‌دهید
 
 ## نصب
 
-**ویندوز (پرتابل)** — آخرین زیپ را از [Releases](https://github.com/Nethyric/orca/releases/latest) بگیرید، باز کنید و `ORCA Agent.exe` را اجرا کنید. بدون نصب، بدون دسترسی مدیر.
+**ویندوز (پرتابل)** — آخرین زیپ را از [Releases](https://github.com/Nethyric/orca/releases/latest) بگیرید، باز کنید و `ORCA.exe` را اجرا کنید. بدون نصب، بدون دسترسی مدیر.
 
 **از سورس** (ویندوز، مک، لینوکس):
 

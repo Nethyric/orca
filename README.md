@@ -36,7 +36,7 @@ ORCA is a desktop agent that plans, writes code, runs it, reads the errors and f
 
 ## Installation
 
-**Windows (portable)** — download the latest zip from [Releases](https://github.com/Nethyric/orca/releases/latest), extract it, run `ORCA Agent.exe`. No installer, no admin rights.
+**Windows (portable)** — download the latest zip from [Releases](https://github.com/Nethyric/orca/releases/latest), extract it, run `ORCA.exe`. No installer, no admin rights.
 
 **From source** (Windows, macOS, Linux):
 

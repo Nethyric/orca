@@ -4,9 +4,9 @@
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Windows SmartScreen blocks `ORCA Agent.exe` | The build is not code-signed | *More info → Run anyway*. Verify the zip's SHA-256 against `SHA256SUMS` on the release page if in doubt |
+| Windows SmartScreen blocks `ORCA.exe` | The build is not code-signed | *More info → Run anyway*. Verify the zip's SHA-256 against `SHA256SUMS` on the release page if in doubt |
 | Antivirus quarantines `ffmpeg.exe` or `yt-dlp.exe` | Heuristics on bundled binaries | Restore them from quarantine or run `npm run fetch-bins` to re-download; the app works without them (media/social tools disabled) |
-| Blank window | GPU driver issue with Chromium | Start once with `--disable-gpu` (`"ORCA Agent.exe" --disable-gpu`) |
+| Blank window | GPU driver issue with Chromium | Start once with `--disable-gpu` (`"ORCA.exe" --disable-gpu`) |
 | `npm start` fails with `Electron failed to install` | Blocked download of the Electron binary | `npm install` again with a working connection, or set `ELECTRON_MIRROR` |
 
 ## Built-in models
