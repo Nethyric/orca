@@ -57,7 +57,7 @@ function listChats() {
     const c = readChat(f.slice(0, -5));
     if (!c) continue;
     const last = [...c.messages].reverse().find((m) => m.role === 'assistant' || m.role === 'user');
-    out.push({ id: c.id, title: c.title || '(بدون عنوان)', mode: c.mode, model: c.model, models: c.models, pinned: !!c.pinned, createdAt: c.createdAt, updatedAt: c.updatedAt, count: c.messages.length, preview: last ? String(last.content || '').replace(/<attached_(file|image)[\s\S]*?<\/attached_\1>/g, '').replace(/\n\n<attached_(file|image)[\s\S]*$/, '').slice(0, 120) : '' });
+    out.push({ id: c.id, title: c.title || '', mode: c.mode, model: c.model, models: c.models, pinned: !!c.pinned, createdAt: c.createdAt, updatedAt: c.updatedAt, count: c.messages.length, preview: last ? String(last.content || '').replace(/<attached_(file|image)[\s\S]*?<\/attached_\1>/g, '').replace(/\n\n<attached_(file|image)[\s\S]*$/, '').slice(0, 120) : '' });
   }
   out.sort((a, b) => (b.pinned - a.pinned) || (b.updatedAt - a.updatedAt));
   indexCache = out;

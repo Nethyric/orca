@@ -2,6 +2,7 @@
 // Electron main: starts the local server on a loopback port and opens the window.
 const { app, BrowserWindow, ipcMain, shell, dialog, nativeTheme, Menu } = require('electron');
 const path = require('path');
+const fs = require('fs');
 const config = require('./core/config');
 const { listen } = require('./server');
 
@@ -28,6 +29,19 @@ function createWindow() {
   win.on('closed', () => { win = null; });
 }
 
+// Plain-text log (<userData>/logs/main.log, rotated at 2 MB) so bug reports have something to attach.
+function setupLog(dir) {
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    const f = path.join(dir, 'main.log');
+    try { if (fs.statSync(f).size > 2 * 1024 * 1024) fs.renameSync(f, path.join(dir, 'main.prev.log')); } catch (_) {}
+    const out = fs.createWriteStream(f, { flags: 'a' });
+    const wrap = (orig, level) => (...a) => { orig(...a); try { out.write(`${new Date().toISOString()} ${level} ${a.map((x) => (x && x.stack) || (typeof x === 'string' ? x : JSON.stringify(x))).join(' ')}\n`); } catch (_) {} };
+    console.log = wrap(console.log.bind(console), 'INFO'); console.warn = wrap(console.warn.bind(console), 'WARN'); console.error = wrap(console.error.bind(console), 'ERROR');
+    console.log(`ORCA ${app.getVersion()} start · ${process.platform} ${process.arch} · electron ${process.versions.electron}`);
+  } catch (_) {}
+}
+
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) app.quit();
 app.on('second-instance', () => { if (win) { if (win.isMinimized()) win.restore(); win.focus(); } });
@@ -36,6 +50,7 @@ app.whenReady().then(async () => {
   nativeTheme.themeSource = 'dark';
   Menu.setApplicationMenu(null);
   config.setDataDir(path.join(app.getPath('userData'), 'data'));
+  setupLog(path.join(app.getPath('userData'), 'logs'));
   createWindow(); // window appears instantly with a splash; server boots in parallel
   try { ({ port } = await listen(0, '127.0.0.1')); }
   catch (e) { dialog.showErrorBox('ORCA', 'Failed to start local server: ' + e.message); app.quit(); return; }

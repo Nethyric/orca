@@ -17,13 +17,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: 20 }
+        with:
+          node-version: 20
       - name: Validate upstreams (each key answers once)
-        env: { UPSTREAMS: ${{ secrets.UPSTREAMS }} }
+        env:
+          UPSTREAMS: ${{ secrets.UPSTREAMS }}
         run: printf '%s' "$UPSTREAMS" | node scripts/vault.js check || echo "::warning::some upstreams failed the probe — sealing anyway (the app skips dead keys automatically)"
       - name: Seal
-        env: { UPSTREAMS: ${{ secrets.UPSTREAMS }} }
-        run: printf '%s' "$UPSTREAMS" | node scripts/vault.js seal
+        env:
+          UPSTREAMS: ${{ secrets.UPSTREAMS }}
+        run: printf '%s' "$UPSTREAMS" | node scripts/vault.js seal remote/vault.json
       - name: Commit
         run: |
           git config user.name "orca-bot"

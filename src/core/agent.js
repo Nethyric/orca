@@ -150,6 +150,35 @@ function splitReasoning(msg) {
   return { content: content.replace(/<\/?think>/g, '').trim(), reasoning: reasoning.replace(/<\/?think>/g, '').trim() };
 }
 
+// Final-answer hygiene for models that leak their template into the text: stray tool-call XML
+// fragments (GLM: "</arg_value></tool_call>"), reasoning echoed verbatim into the content, and
+// the same paragraph repeated back-to-back.
+function tidyAnswer(content, reasoning) {
+  let t = String(content || '');
+  t = t.replace(/<\/?(tool_call|arg_key|arg_value|function|invoke|parameter|tool_response|observation)[^>]*>/g, '');
+  t = t.replace(/<\|[a-z_]+\|>/g, ''); // <|im_end|>, <|observation|> …
+  if (reasoning) {
+    const r = String(reasoning).replace(/\s+/g, ' ').trim();
+    if (r.length > 40) {
+      const paras = t.split(/\n{2,}/);
+      const kept = paras.filter((p) => { const n = p.replace(/\s+/g, ' ').trim(); return !(n.length > 40 && (r.includes(n) || n.includes(r))); });
+      if (kept.length && kept.join('').trim()) t = kept.join('\n\n');
+      else if (paras.length) { // everything looked like reasoning: keep the shortest paragraph that isn't (likely the actual answer)
+        const cand = paras.map((p) => p.trim()).filter(Boolean).filter((p) => !r.includes(p.replace(/\s+/g, ' ')));
+        if (cand.length) t = cand.join('\n\n');
+      }
+      // reasoning glued to the answer without a blank line: "PING The user asked me…"
+      const glued = t.indexOf(String(reasoning).trim().slice(0, 60));
+      if (glued > 0 && String(reasoning).trim().length > 60) t = t.slice(0, glued).trim();
+    }
+  }
+  // collapse immediate duplicate paragraphs / lines ("PING\nPING")
+  const out = []; for (const p of t.split(/\n{2,}/)) { if (out.length && out[out.length - 1].trim() === p.trim()) continue; out.push(p); }
+  t = out.join('\n\n');
+  const lines = t.split('\n'); const dl = []; for (const l of lines) { if (dl.length && l.trim() && dl[dl.length - 1].trim() === l.trim()) continue; dl.push(l); }
+  return dl.join('\n').trim();
+}
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const RETRYABLE = new Set([408, 409, 425, 429, 500, 502, 503, 504]);
 
@@ -402,7 +431,7 @@ async function runAgent(o) {
           emit('status', { text: L().empty, kind: 'retry' });
           continue;
         }
-        const text = res.content.trim() || (res.reasoning ? res.reasoning.slice(-1200) : L().noAnswer);
+        const text = tidyAnswer(res.content, res.reasoning) || (res.reasoning ? res.reasoning.slice(-1200) : L().noAnswer);
         emit('final', { text, model: usedLabel, modelKey: res.used, usage: totalUsage });
         return { api, checkpoints, text, model: usedLabel };
       }

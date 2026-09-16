@@ -28,7 +28,6 @@ process.on('uncaughtException', (e) => console.error('[uncaught]', e && e.stack 
 process.on('unhandledRejection', (e) => console.error('[unhandled]', e && e.stack || e));
 function broadcast(payload) { const s = `data: ${JSON.stringify(payload)}\n\n`; for (const c of clients) { try { c.write(s); } catch (_) {} } }
 
-let orCache = null;
 
 function startLane({ chatId, runId, lane, modelKey, history, planMode, autonomy }) {
   const msg = store.addMessage(chatId, { role: 'assistant', content: '', model: config.resolve(modelKey)?.label || modelKey, modelKey, lane, events: [], status: 'running', runId });
@@ -140,12 +139,6 @@ async function handleApi(req, res, url) {
   if (p === '/api/providers/models' && req.method === 'GET') return json(res, 200, await catalog.models(q.get('id')));
   if (p === '/api/providers/discover' && req.method === 'POST') { try { const st = body.id && config.load().providers[body.id]; const b = { ...body, apiKey: body.apiKey || (st && st.apiKey) || '', baseUrl: body.baseUrl || (st && st.baseUrl) || '' }; return json(res, 200, { models: await catalog.discover(b) }); } catch (e) { return json(res, 200, { models: [], error: e.message }); } }
   if (p === '/api/vault' && req.method === 'GET') { if (q.get('refresh') === '1') await vault.refresh(true).catch(() => {}); return json(res, 200, vault.status()); }
-  if (p === '/api/openrouter/models') {
-    if (orCache && Date.now() - orCache.ts < 6 * 3600e3) return json(res, 200, { models: orCache.models, cached: true });
-    try { const r = await fetch('https://openrouter.ai/api/v1/models'); const j = await r.json(); const models = (j.data || []).map((m) => ({ id: m.id, name: m.name, ctx: m.context_length, prompt: m.pricing?.prompt, completion: m.pricing?.completion, tools: (m.supported_parameters || []).includes('tools') })); orCache = { ts: Date.now(), models }; return json(res, 200, { models }); }
-    catch (e) { return json(res, 200, { error: e.message, models: [] }); }
-  }
-
   // ---- stats / backup ----
   if (p === '/api/stats') {
     const chats = store.listChats(); let messages = 0, bytes = 0;
@@ -336,7 +329,12 @@ function listen(port, host) {
 if (require.main === module) {
   const port = +(process.env.PORT || 7860);
   if (process.env.ORCA_DATA) config.setDataDir(process.env.ORCA_DATA);
-  listen(port, '0.0.0.0').then(({ port }) => console.log(`ORCA web mode → http://0.0.0.0:${port}  data: ${config.getDataDir()}`));
+  // Web mode has no authentication and the agent can run shell commands: bind to loopback unless HOST is set explicitly.
+  const host = process.env.HOST || '127.0.0.1';
+  listen(port, host).then(({ port }) => {
+    console.log(`ORCA web mode → http://${host === '0.0.0.0' ? 'localhost' : host}:${port}  data: ${config.getDataDir()}`);
+    if (host === '0.0.0.0') console.log('WARNING: listening on all interfaces without authentication — anyone on your network can control this agent. Use a firewall or a reverse proxy with auth.');
+  });
 }
 
 module.exports = { listen, createServer };
