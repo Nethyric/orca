@@ -1,0 +1,16 @@
+node_modules/
+release/
+bin/*
+!bin/.gitkeep
+assets/tessdata/*
+!assets/tessdata/.gitkeep
+gateway/node_modules/
+gateway/.wrangler/
+gateway/kv.json
+gateway/out.txt
+.DS_Store
+*.log
+.env
+
+# generated at build time (contains the gateway build token)
+src/build-info.json

@@ -1,0 +1,104 @@
+{
+  "name": "orca-agent",
+  "productName": "ORCA Agent",
+  "version": "1.5.0",
+  "description": "ORCA Agent — autonomous multi-model AI agent (desktop). Open source by Nethyric.",
+  "main": "src/main.js",
+  "author": "Nethyric",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "web": "node src/server.js",
+    "dist:win": "node scripts/bake.js && electron-builder --win --x64 && node scripts/finish-win.js",
+    "fetch-bins": "node scripts/fetch-bins.js",
+    "set-repo": "node scripts/set-repo.js",
+    "gateway:deploy": "cd gateway && npx wrangler deploy"
+  },
+  "devDependencies": {
+    "electron": "33.4.11",
+    "electron-builder": "25.1.8",
+    "resedit": "^2.0.3"
+  },
+  "build": {
+    "appId": "ai.orca.agent",
+    "productName": "ORCA Agent",
+    "artifactName": "ORCA-Agent-${version}-win-${arch}.${ext}",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "src/**/*",
+      "ui/**/*",
+      "assets/icon.png",
+      "assets/logo.png",
+      "assets/icon512.png",
+      "package.json",
+      "orca.config.json",
+      "remote/**",
+      "ui/i18n.js",
+      "ui/vendor/NotoSansSC.woff2"
+    ],
+    "asar": true,
+    "compression": "normal",
+    "win": {
+      "target": [
+        {
+          "target": "dir",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "assets/icon.ico",
+      "signAndEditExecutable": false
+    },
+    "portable": {
+      "artifactName": "ORCA-Agent-${version}-portable.exe"
+    },
+    "extraResources": [
+      {
+        "from": "bin/ffmpeg.exe",
+        "to": "bin/ffmpeg.exe"
+      },
+      {
+        "from": "bin/yt-dlp.exe",
+        "to": "bin/yt-dlp.exe"
+      },
+      {
+        "from": "assets/tessdata",
+        "to": "tessdata"
+      }
+    ],
+    "asarUnpack": [
+      "ui/vendor/Vazirmatn.ttf",
+      "node_modules/tesseract.js/**",
+      "node_modules/tesseract.js-core/**",
+      "node_modules/regenerator-runtime/**",
+      "node_modules/is-url/**",
+      "node_modules/wasm-feature-detect/**",
+      "node_modules/bmp-js/**",
+      "node_modules/node-fetch/**",
+      "node_modules/whatwg-url/**",
+      "node_modules/tr46/**",
+      "node_modules/webidl-conversions/**",
+      "node_modules/zlibjs/**",
+      "node_modules/idb-keyval/**",
+      "node_modules/tesseract.js/node_modules/**",
+      "**/tesseract.js-core/**",
+      "**/*.wasm"
+    ]
+  },
+  "dependencies": {
+    "docx": "^9.7.1",
+    "exceljs": "^4.4.0",
+    "mammoth": "^1.12.2",
+    "pdf-parse": "^1.1.1",
+    "pptxgenjs": "^4.0.1",
+    "tesseract.js": "^7.0.0"
+  },
+  "homepage": "https://github.com/Nethyric/orca",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Nethyric/orca.git"
+  }
+}

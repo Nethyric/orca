@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en" dir="ltr" data-theme="dark" data-accent="indigo" data-density="comfortable">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>ORCA</title>
+<link rel="icon" href="/assets/icon512.png">
+<link rel="preload" href="/vendor/Vazirmatn.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/vendor/Inter.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/vendor/hljs.css">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-panel-l" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16"/></symbol>
+    <symbol id="i-panel-r" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M15 4v16"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></symbol>
+    <symbol id="i-send" viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></symbol>
+    <symbol id="i-attach" viewBox="0 0 24 24"><path d="M21.4 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.2-9.19a4 4 0 015.65 5.66l-9.2 9.19a2 2 0 01-2.82-2.83l8.48-8.48"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.8-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1.1-1.5 1.7 1.7 0 00-1.8.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.8 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.5-1.1 1.7 1.7 0 00-.3-1.8l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.8.3H9a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.8-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.8V9a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z"/></symbol>
+    <symbol id="i-brain" viewBox="0 0 24 24"><path d="M9.5 2a2.5 2.5 0 00-2.5 2.5v.5A3 3 0 004 8v1a3 3 0 00-1 5.5A3 3 0 005 19a3 3 0 005 1.5V4.5A2.5 2.5 0 009.5 2zM14.5 2A2.5 2.5 0 0017 4.5v.5a3 3 0 013 3v1a3 3 0 011 5.5A3 3 0 0119 19a3 3 0 01-5 1.5V4.5A2.5 2.5 0 0114.5 2z"/></symbol>
+    <symbol id="i-trophy" viewBox="0 0 24 24"><path d="M8 21h8M12 17v4M7 4h10v5a5 5 0 01-10 0V4zM7 6H4a2 2 0 002 4h1M17 6h3a2 2 0 01-2 4h-1"/></symbol>
+    <symbol id="i-chat" viewBox="0 0 24 24"><path d="M21 12a8 8 0 01-11.6 7.1L4 20l1-4.6A8 8 0 1121 12z"/></symbol>
+    <symbol id="i-compare" viewBox="0 0 24 24"><path d="M12 3v18M4 7h5M4 12h5M4 17h5M15 7h5M15 12h5M15 17h5"/></symbol>
+    <symbol id="i-swords" viewBox="0 0 24 24"><path d="M14.5 17.5L3 6V3h3l11.5 11.5M13 19l6-6M16 16l4 4M19 21l2-2M9.5 17.5L21 6V3h-3L6.5 14.5M11 19l-6-6M8 16l-4 4M5 21l-2-2"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></symbol>
+    <symbol id="i-pin" viewBox="0 0 24 24"><path d="M12 17v5M9 3h6l-1 7 3 3H7l3-3-1-7z"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v6M14 11v6"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M21 12a9 9 0 11-3-6.7L21 8M21 3v5h-5"/></symbol>
+    <symbol id="i-edit" viewBox="0 0 24 24"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></symbol>
+    <symbol id="i-plan" viewBox="0 0 24 24"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2M9 12h6M9 16h6"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 018 0v4"/></symbol>
+    <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 2L4 14h7l-1 8 9-12h-7l1-8z"/></symbol>
+    <symbol id="i-rocket" viewBox="0 0 24 24"><path d="M5 15c-1.5 1.5-2 5-2 5s3.5-.5 5-2M12 15l-3-3 6-7a5 5 0 014-2 5 5 0 01-2 4l-7 6zM9 12l-4-1 3-3 3 1M12 15l1 4 3-3-1-3"/></symbol>
+    <symbol id="i-external" viewBox="0 0 24 24"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6M15 3h6v6M10 14L21 3"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="m10 9 5 3-5 3z" fill="currentColor" stroke="none"/></symbol><symbol id="i-file" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8zM14 2v6h6"/></symbol>
+    <symbol id="i-terminal" viewBox="0 0 24 24"><path d="M4 17l6-6-6-6M12 19h8"/></symbol>
+    <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15 15 0 014 10 15 15 0 01-4 10 15 15 0 01-4-10 15 15 0 014-10z"/></symbol>
+    <symbol id="i-code" viewBox="0 0 24 24"><path d="M16 18l6-6-6-6M8 6l-6 6 6 6"/></symbol>
+    <symbol id="i-undo" viewBox="0 0 24 24"><path d="M3 7v6h6M3 13a9 9 0 103-7.7L3 8"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1111.2 3a7 7 0 009.8 9.8z"/></symbol>
+    <symbol id="i-sparkle" viewBox="0 0 24 24"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8L12 3zM19 17l.8 2.2L22 20l-2.2.8L19 23l-.8-2.2L16 20l2.2-.8L19 17z"/></symbol>
+    <symbol id="i-chev" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></symbol>
+    <symbol id="i-question" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M9.1 9a3 3 0 015.8 1c0 2-3 3-3 3M12 17h0"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></symbol>
+    <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></symbol>
+    <symbol id="i-more" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></symbol>
+    <symbol id="i-keyboard" viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h0M10 10h0M14 10h0M18 10h0M8 14h8"/></symbol>
+    <symbol id="i-minimize" viewBox="0 0 24 24"><path d="M5 12h14"/></symbol>
+    <symbol id="i-maximize" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="1"/></symbol>
+    <symbol id="i-zap-off" viewBox="0 0 24 24"><path d="M12.4 6.6L13 2 8.6 7.9M18.4 12.6L20 10h-6M4 4l16 16M9.2 9.2L4 16h7l-1 6 5-6.6"/></symbol>
+  </defs>
+</svg>
+
+<div id="app">
+  <header id="titlebar">
+    <div class="tb-side tb-start">
+      <button class="ib" id="rail-toggle" data-tip="Ctrl+B"><svg><use href="#i-panel-l"/></svg></button>
+      <img src="/assets/logo.png" class="tb-logo" alt="">
+      <span class="tb-name">ORCA</span>
+      <span class="dot" id="tb-status"></span>
+    </div>
+    <div class="tb-center" id="tb-title"></div>
+    <div class="tb-side tb-end">
+      <button class="ib" id="tb-theme" data-tip="Theme"><svg><use href="#i-moon"/></svg></button>
+      <button class="tb-lang" id="tb-lang">EN</button>
+      <span class="win-btns">
+        <button class="wb" data-win="min"><svg><use href="#i-minimize"/></svg></button>
+        <button class="wb" data-win="max"><svg><use href="#i-maximize"/></svg></button>
+        <button class="wb wb-close" data-win="close"><svg><use href="#i-x"/></svg></button>
+      </span>
+    </div>
+  </header>
+
+  <div id="body">
+    <aside id="rail">
+      <div class="rail-top">
+        <button id="new-chat" class="btn btn-primary btn-block"><svg><use href="#i-plus"/></svg><span data-i18n="newChat">گفتگوی جدید</span><kbd>Ctrl N</kbd></button>
+        <label class="search"><svg><use href="#i-search"/></svg><input id="search" type="search" placeholder="جست‌وجو…" data-i18n-ph="searchPh" autocomplete="off"><kbd>Ctrl K</kbd></label>
+      </div>
+      <nav id="chat-list" class="scroll"></nav>
+      <div class="rail-bottom">
+        <button class="rail-link" id="open-leaderboard"><svg><use href="#i-trophy"/></svg><span data-i18n="leaderboard">رتبه‌بندی</span></button>
+        <button class="rail-link" id="open-memory"><svg><use href="#i-brain"/></svg><span data-i18n="memory">حافظه</span></button>
+        <button class="rail-link" id="open-settings"><svg><use href="#i-settings"/></svg><span data-i18n="settings">تنظیمات</span><kbd>Ctrl ,</kbd></button>
+      </div>
+    </aside>
+
+    <main id="main">
+      <div id="modebar">
+        <div class="seg" id="mode-seg" role="tablist">
+          <button data-mode="direct" class="active"><svg><use href="#i-chat"/></svg><span data-i18n="modeDirect">گفتگو</span></button>
+          <button data-mode="side"><svg><use href="#i-compare"/></svg><span data-i18n="modeSide">مقایسه</span></button>
+          <button data-mode="battle"><svg><use href="#i-swords"/></svg><span data-i18n="modeBattle">نبرد</span></button>
+        </div>
+        <div class="modebar-end">
+          <div class="picker" id="pick-single"></div>
+          <div class="picker hidden" id="pick-a" data-slot="A"></div>
+          <div class="picker hidden" id="pick-b" data-slot="B"></div>
+          <button class="ib" id="toggle-panel" data-tip="Ctrl+."><svg><use href="#i-panel-r"/></svg></button>
+        </div>
+      </div>
+
+      <section id="thread" class="scroll">
+        <div id="welcome">
+          <div class="hero">
+            <img src="/assets/logo.png" class="hero-logo" alt="">
+            <h1><span data-i18n="heroTitle">امروز چه چیزی بسازیم؟</span></h1>
+            <p data-i18n="tagline">می‌نویسد، اجرا می‌کند، جست‌وجو می‌کند، اشکال‌زدایی می‌کند — روی همین سیستم.</p>
+          </div>
+          <div class="suggestions" id="suggestions"></div>
+        </div>
+        <div id="messages"></div>
+        <button id="jump-bottom" class="hidden"><svg><use href="#i-chev"/></svg></button>
+      </section>
+
+      <div id="composer-wrap">
+        <div id="status-line" class="hidden"><span class="spinner"></span><span id="status-text"></span><span id="status-steps" class="mono"></span><button id="stop-btn"><svg><use href="#i-stop"/></svg><span data-i18n="stop">توقف</span><kbd>Esc</kbd></button></div>
+        <div id="attach-list" class="attach-list hidden"></div>
+        <div id="composer">
+          <textarea id="input" rows="1" placeholder="…" data-i18n-ph="inputPh"></textarea>
+          <div class="composer-bar">
+            <div class="composer-tools">
+              <button class="chip" id="plan-toggle" data-tip="حالت نقشه: فقط برنامه می‌دهد، چیزی نمی‌سازد (Plan mode)"><svg><use href="#i-plan"/></svg><span data-i18n="plan">نقشه</span></button>
+              <div class="seg seg-sm" id="autonomy">
+                <button data-a="ask" data-tip="Ask before every action"><svg><use href="#i-lock"/></svg></button>
+                <button data-a="auto" class="active" data-tip="Auto — confirm only risky actions"><svg><use href="#i-bolt"/></svg></button>
+                <button data-a="yolo" data-tip="Full autonomy"><svg><use href="#i-rocket"/></svg></button>
+              </div>
+              <button class="chip chip-icon" id="attach-btn" data-tip="Attach files"><svg><use href="#i-attach"/></svg></button>
+              <input type="file" id="file-input" multiple hidden>
+              <span class="ws-chip mono" id="ws-path"></span>
+            </div>
+            <div class="composer-end">
+              <span class="hint" id="send-hint">Enter ↵</span>
+              <button id="send" class="send-btn" data-tip="Send"><svg><use href="#i-send"/></svg></button>
+            </div>
+          </div>
+        </div>
+        <div class="footnote"><span data-i18n="footnote">ORCA می‌تواند اشتباه کند — خروجی‌های مهم را بررسی کنید.</span></div>
+      </div>
+    </main>
+
+    <aside id="panel" class="collapsed">
+      <div class="panel-tabs" role="tablist">
+        <button data-tab="timeline" class="active"><svg><use href="#i-clock"/></svg><span data-i18n="tabTimeline">تایم‌لاین</span></button>
+        <button data-tab="files"><svg><use href="#i-folder"/></svg><span data-i18n="tabFiles">فایل‌ها</span></button>
+        <button data-tab="changes"><svg><use href="#i-code"/></svg><span data-i18n="tabChanges">تغییرات</span><b class="badge hidden" id="chg-badge"></b></button>
+        <button data-tab="preview"><svg><use href="#i-image"/></svg><span data-i18n="tabPreview">پیش‌نمایش</span></button>
+      </div>
+      <div class="panel-body scroll">
+        <div id="tab-timeline" class="tab active"><div class="empty" data-i18n="emptyTimeline">ابزارهایی که ORCA اجرا می‌کند این‌جا ثبت می‌شوند.</div></div>
+        <div id="tab-files" class="tab"><div class="tab-actions"><span class="mono ws-lbl" id="ws-lbl"></span><span class="grow"></span><button class="ib sm" id="refresh-files" data-tip="Refresh"><svg><use href="#i-refresh"/></svg></button><button class="ib sm" id="open-ws" data-tip="Open folder"><svg><use href="#i-external"/></svg></button></div><div id="file-tree"></div></div>
+        <div id="tab-changes" class="tab"><div class="tab-actions"><button class="btn sm" id="restore-all" data-i18n="restoreAll">بازگردانی همه</button><span class="grow"></span></div><div id="changes-list"></div></div>
+        <div id="tab-preview" class="tab"><div class="tab-actions"><span id="preview-name" class="mono"></span><span class="grow"></span><span id="preview-actions"></span><button id="preview-save" class="btn sm primary hidden" data-i18n="save">ذخیره</button></div><div id="preview-body"></div></div>
+      </div>
+    </aside>
+  </div>
+
+  <div id="cmdk" class="hidden"><div class="cmdk-card"><label class="search big"><svg><use href="#i-search"/></svg><input id="cmdk-input" placeholder="…" autocomplete="off"></label><div id="cmdk-list" class="scroll"></div></div></div>
+  <div id="modal" class="hidden"><div class="modal-card"><button class="ib modal-x"><svg><use href="#i-x"/></svg></button><div id="modal-body" class="scroll"></div></div></div>
+  <div id="toasts"></div>
+  <div id="tip"></div>
+</div>
+
+<script src="/vendor/marked.js"></script>
+<script src="/vendor/purify.js"></script>
+<script src="/vendor/highlight.js"></script>
+<script src="/i18n.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>

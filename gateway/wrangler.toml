@@ -1,0 +1,27 @@
+name = "orca-gateway"
+main = "src/index.js"
+compatibility_date = "2025-09-01"
+workers_dev = true
+
+# Public (non-secret) settings. Secrets (UPSTREAMS, BUILD_TOKEN, ADMIN_TOKEN) are NOT here:
+#   wrangler secret put UPSTREAMS      ← JSON with provider keys (see README)
+#   wrangler secret put BUILD_TOKEN
+#   wrangler secret put ADMIN_TOKEN
+# or let GitHub Actions push them from repository Secrets (see .github/workflows/gateway.yml).
+[vars]
+REPO = "Nethyric/orca"
+DAILY_BUDGET = "400"
+# MIN_VERSION = "1.5.0"   # uncomment to force very old clients to update
+# NOTICE = "Maintenance tonight 22:00 UTC"
+
+# Per-IP rate limit (free plan OK): 60 requests / 60 s per IP
+[[ratelimits]]
+name = "RL"
+namespace_id = "1001"
+simple = { limit = 60, period = 60 }
+
+# Usage counters / disabled keys / notice. Create once:  wrangler kv namespace create ORCA_KV
+# then paste the id below (the GitHub workflow does this automatically).
+[[kv_namespaces]]
+binding = "KV"
+id = "REPLACE_WITH_KV_ID"

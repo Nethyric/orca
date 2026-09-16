@@ -1,0 +1,36 @@
+name: Release (Windows build)
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: npm }
+      - name: Install
+        run: npm ci --no-audit --no-fund
+      - name: Fetch bundled binaries (ffmpeg, yt-dlp, tessdata)
+        run: node scripts/fetch-bins.js
+      - name: Build portable zip
+        env:
+          ORCA_BUILD_TOKEN: ${{ secrets.BUILD_TOKEN }}
+        run: npm run dist:win
+      - name: Checksums
+        run: cd release && sha256sum *.zip > SHA256SUMS
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release/*.zip
+            release/SHA256SUMS
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}

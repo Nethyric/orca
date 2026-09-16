@@ -1,0 +1,15 @@
+name: Bug report
+description: Something is broken
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes: { label: ORCA version, placeholder: "Settings → Updates → Installed" }
+    validations: { required: true }
+  - type: textarea
+    id: what
+    attributes: { label: What happened?, description: Steps, expected vs actual, screenshots }
+    validations: { required: true }
+  - type: dropdown
+    id: lang
+    attributes: { label: UI language, options: [English, فارسی, Русский, 中文] }

@@ -1,0 +1,511 @@
+'use strict';
+// The agentic loop: streaming, tool calls, approvals (autonomy levels), plan mode,
+// checkpoints, model fallback, ask_user pauses, stop.
+const os = require('os');
+const config = require('./config');
+const remote = require('./remote');
+const isGateway = (cfg) => !!(config.GATEWAY && cfg && cfg.baseUrl && cfg.baseUrl.startsWith(config.GATEWAY));
+const tools = require('./tools');
+const store = require('./store');
+
+function memorySnippet() {
+  try {
+    const f = require('path').join(config.getDataDir(), 'memory.md');
+    const txt = require('fs').readFileSync(f, 'utf8').trim();
+    if (!txt) return '';
+    const lines = txt.split('\n').filter(Boolean).slice(-40).join('\n');
+    return `\n\nLONG-TERM MEMORY (notes you saved earlier about this user/projects; use them, keep them updated with remember):\n${lines.slice(0, 4000)}`;
+  } catch (_) { return ''; }
+}
+
+const STR = {
+  fa: { thinking: (m, s) => `${m} در حال فکر کردن… (مرحلهٔ ${s})`, fallback: (a, b) => `↩︎ ${a} در دسترس نبود — سوییچ به ${b}`, retry: (e) => `⚠ ${e} — تلاش مجدد`, empty: 'پاسخ خالی بود — درخواست پاسخ نهایی', allFailed: 'همهٔ مدل‌ها ناموفق بودند. آخرین خطا: ', cap: '⚠️ به سقف مراحل رسیدم. اگر بخواهید ادامه می‌دهم — بگویید «ادامه بده».', running: (n) => `اجرای ${n} ابزار به‌صورت موازی…`, noAnswer: '(پاسخ خالی)', compacting: 'گفتگو طولانی شد — فشرده‌سازی خودکار تاریخچه…', continuing: 'ادامهٔ پاسخ…' },
+  en: { thinking: (m, s) => `${m} is thinking… (step ${s})`, fallback: (a, b) => `↩︎ ${a} unavailable — switched to ${b}`, retry: (e) => `⚠ ${e} — retrying`, empty: 'Empty answer — requesting final answer', allFailed: 'All models failed. Last error: ', cap: '⚠️ Step limit reached. Say "continue" and I will carry on.', running: (n) => `running ${n} tools in parallel…`, noAnswer: '(empty answer)', compacting: 'Long conversation — auto-compacting history…', continuing: 'continuing…' },
+  ru: { thinking: (m, s) => `${m} думает… (шаг ${s})`, fallback: (a, b) => `↩︎ ${a} недоступна — переключение на ${b}`, retry: (e) => `⚠ ${e} — повтор`, empty: 'Пустой ответ — запрашиваю финальный ответ', allFailed: 'Все модели недоступны. Последняя ошибка: ', cap: '⚠️ Достигнут лимит шагов. Напишите «продолжай», и я продолжу.', running: (n) => `выполняю ${n} инструментов параллельно…`, noAnswer: '(пустой ответ)', compacting: 'Долгий диалог — автоматическое сжатие истории…', continuing: 'продолжаю…' },
+  zh: { thinking: (m, s) => `${m} 正在思考…（第 ${s} 步）`, fallback: (a, b) => `↩︎ ${a} 不可用 — 已切换到 ${b}`, retry: (e) => `⚠ ${e} — 重试中`, empty: '回答为空 — 请求最终回答', allFailed: '所有模型均失败。最后错误：', cap: '⚠️ 已达到步骤上限。说“继续”我会接着做。', running: (n) => `并行运行 ${n} 个工具…`, noAnswer: '（空回答）', compacting: '对话过长 — 自动压缩历史…', continuing: '继续…' },
+};
+const L = () => STR[config.load().lang] || STR.en;
+
+// ---- auto router: fast model for light requests, strong model for real work ----
+const HEAVY = /(بساز|ایجاد کن|درست کن|پیاده|پروژه|کد|برنامه|اسکریپت|نصب|تحلیل|دیباگ|رفع|باگ|تست|فایل|پوشه|سایت|اپ\b|بازی|الگوریتم|بهینه|ریفکتور|دیتابیس|سرور|بنویس.*(کد|تابع|کلاس)|\bbuild\b|\bcreate\b|\bimplement\b|\bwrite (a |an |the )?(code|script|program|app|function|class|module)|\bfix\b|\bdebug\b|\brefactor\b|\binstall\b|\bdeploy\b|\banaly[sz]e\b|\bproject\b|\btest\b|\bfile\b|\bfolder\b|\bscript\b|\bapi\b|\bdatabase\b|\bwebsite\b|\bgame\b|\balgorithm\b|\boptimi[sz]e\b|\bmigrate\b|```)/i;
+function routeAuto({ text = '', history = [], planMode = false, hasFiles = false }) {
+  const models = config.allModels().filter((m) => config.resolve(m.key)?.apiKey);
+  const strong = models.find((m) => m.tier === 'strong') || models[0];
+  const fast = models.find((m) => m.tier === 'fast') || strong;
+  if (!strong || !fast) return config.load().defaultModel;
+  if (planMode || hasFiles || text.length > 700 || HEAVY.test(text)) return strong.key;
+  // continuing a task where tools were just used → stay strong
+  const lastA = [...history].reverse().find((m) => m.role === 'assistant');
+  if (lastA && (lastA.events || []).some((e) => e.event === 'tool_call' && !['web_search', 'fetch_page', 'recall'].includes(e.data?.name))) return strong.key;
+  return fast.key;
+}
+
+// ---- context window management: keep system + recent turns within a char budget ----
+function fitContext(msgs, budget = 160000) {
+  const sys = msgs[0];
+  const rest = msgs.slice(1);
+  const size = (m) => (typeof m.content === 'string' ? m.content.length : JSON.stringify(m.content || '').length) + (m.tool_calls ? JSON.stringify(m.tool_calls).length : 0);
+  // group into turns starting at each user message
+  const turns = [];
+  for (const m of rest) { if (m.role === 'user' || !turns.length) turns.push([m]); else turns[turns.length - 1].push(m); }
+  // shrink tool results in older turns first
+  const shrink = (turn, max) => turn.map((m) => (m.role === 'tool' && typeof m.content === 'string' && m.content.length > max ? { ...m, content: m.content.slice(0, max) + `…[truncated ${m.content.length - max} chars]` } : m));
+  let out = turns.map((t, i) => (i < turns.length - 2 ? shrink(t, 1200) : t));
+  let total = size(sys) + out.flat().reduce((a, m) => a + size(m), 0);
+  while (total > budget && out.length > 1) { const dropped = out.shift(); total -= dropped.reduce((a, m) => a + size(m), 0); }
+  if (total > budget) { // still too big: shrink the current turn's tool results too
+    out = out.map((t) => shrink(t, 4000));
+  }
+  const flat = out.flat();
+  return [sys, ...(out.length < turns.length ? [{ role: 'user', content: '[system] Earlier parts of this long conversation were trimmed to fit the context window. Continue from the latest messages.' }] : []), ...flat];
+}
+
+function projectMemory() {
+  try { const pm = tools.extras.projectMemory(); if (!pm) return ''; return `\n\nPROJECT MEMORY (${pm.file} in the workspace — follow it; update it with edit_file when decisions change):\n${pm.text}`; } catch (_) { return ''; }
+}
+
+function systemPrompt(opts = {}) {
+  const c = config.load();
+  const ws = config.workspaceDir();
+  const py = tools.findPython();
+  const vision = (() => { try { return tools.extras.visionModel(); } catch (_) { return null; } })();
+  const lang = ({ en: 'English', fa: 'Persian (Farsi)', ru: 'Russian', zh: 'Simplified Chinese' })[c.lang] || 'English';
+  const persona = (c.persona || '').trim() ? `\n\nABOUT THE USER: ${c.persona.trim().slice(0, 1500)}` : '';
+  const rules = (c.rules || '').trim() ? `\n\nUSER RULES (always follow):\n${c.rules.trim().slice(0, 6000)}` : '';
+  const effort = c.reasoningEffort === 'high' ? '\n- Think carefully and thoroughly before acting; double-check edge cases and verify results twice.' : c.reasoningEffort === 'low' ? '\n- Be quick and pragmatic; skip deep deliberation for simple tasks.' : '';
+  const plan = opts.planMode ? `
+
+PLAN MODE IS ON: do NOT modify anything. Investigate (read files, search) as needed, then reply with a concise numbered implementation plan (files to create/change, commands to run, risks). End with exactly the phrase "Shall I execute?" translated into the user's language (fa: "اجرا کنم؟", ru: "Выполнить?", zh: "要执行吗？") and wait.` : '';
+  return `You are ORCA, an elite autonomous AI agent running as a desktop app on the user's computer (${os.platform()} ${os.release()} ${os.arch()}). Date: ${new Date().toISOString().slice(0, 10)}.
+
+TOOLS (real, executed on this machine — never fake a result): shell (${process.platform === 'win32' ? 'cmd.exe by default; PowerShell auto-detected' : 'bash'}), run_node (always available), ${py ? 'run_python (' + py + ')' : 'NO Python — use run_node'}, files (read_file/write_file/edit_file/delete_file/list_files/glob/grep) in workspace "${ws}" (shell cwd; relative paths resolve there), diagnostics (syntax check), todo_write/todo_read (visible checklist), task (sub-agents with fresh context, run in parallel), web_search + fetch_page + http_request, VISION: view_image (OCR eng+fas${vision ? ' + vision model ' + vision.model : '; no vision model configured — text-only models, OCR is what you get'}), screenshot (headless Chrome), SOCIAL: social_download (Instagram/TikTok/X/YouTube/… videos, photos, carousels, profiles, playlists → downloads/), social_trending (TikTok explore feed & search, YouTube trending, X trends, Instagram user posts; download=true to fetch), GENERATE: generate_image (text→image, free provider built in), generate_video (text→video; real T2V with a Replicate/fal key, otherwise animated AI key-frames), OFFICE: write_docx/read_docx (Word), write_xlsx/read_xlsx (Excel, formulas, csv), write_pptx (designed PowerPoint decks), read_pdf, MEDIA (built-in ffmpeg, no install): media_info, media_edit (trim/convert/resize/compress/extract_audio/speed/gif/thumbnail/text watermark/crop/rotate/volume/fade), media_concat, media_from_images (slideshow), media_subtitles; remember/recall long-term memory, project_init (ORCA.md project memory), ask_user.
+
+HOW TO WORK
+- Act first, ask only when a wrong guess would be costly. Never open with a questionnaire: pick sensible defaults, state them in one line, and start building; the user can redirect you. If the user answers a question with a bare choice/token/number, that IS the answer — continue immediately. Decompose big goals; call independent tools together in one turn (they run in parallel).
+- Secrets the user pastes (API tokens, keys) go into a config file or .env, never hard-coded into source and never echoed back in full.
+- Build real things end-to-end: create files, run them, read errors, fix, re-run. Never stop at "you could…" when you can do it.
+- OUTPUT LIMIT: about 4000 tokens per turn, thinking included. Never put more than ~100 lines (≈4 KB) in one tool call. Split code into small modules (e.g. api.js, handlers.js, store.js, main.js), or write the first ~100 lines and continue with write_file(append=true). Keep thinking short when you are about to write code. One giant call gets cut off and wastes minutes.
+- Verify: after writing code run it or test it; after edits re-read if unsure. Own your mistakes and fix them.
+- Prefer zero-dependency solutions (node:test/assert, python stdlib, plain HTML/CSS/JS) over installing frameworks unless asked. If the same command fails twice, do NOT retry variations of it — change approach (simplify, drop the dependency) or report the blocker.
+- Unsure facts (news, prices, versions, docs, dates): web_search, then fetch_page the best 1-3 sources, cite URLs.
+- Math/data: compute with run_node or run_python, never in your head.
+- Office work (reports, letters, tables, decks): produce the real file (docx/xlsx/pptx) with the office tools — not just Markdown — then tell the user the path. For video/audio edits run media_info first, then media_edit; the user's files are usually in the workspace or an absolute path they give you (copy them into the workspace with the shell if needed).
+- Files the user mentions by absolute path outside the workspace: copy them in with run_shell first (tools only touch the workspace).
+- Destructive/high-impact actions (deleting, force-push, system changes): say why first.
+- Memory: user preferences, names, project facts and decisions → remember. Memory below is already loaded.
+- Multi-step jobs (3+ steps): first call todo_write with the full checklist, then keep statuses current (in_progress → done) as you work; the user watches it live. Big independent sub-problems → task sub-agents in parallel.
+- Images the user attaches are saved under attachments/ and pre-analyzed for you (OCR text${vision ? ' + vision description' : ''} appears inside <attached_image>). Use view_image on any image path/URL to inspect it (question= what to look for). Never claim you cannot see images without trying view_image first; if only OCR is available, say what the OCR read and what could not be determined.
+- Social media: for "download this link" use social_download directly (no research needed). For "trending/explore/popular videos" use social_trending (platform, region, query, download=true, max_download). Instagram Explore/stories/private content need the user's cookies — say so briefly and offer the alternatives instead of failing silently. Report every saved file path.
+- Final answer: concise Markdown in the user's language (default ${lang}); code, commands and paths in English. State what you did, results, file paths. Files you produced (images, videos, docs) → list their paths so the UI can preview them. No tool-output dumps unless asked.${effort}${plan}${persona}${rules}${projectMemory()}${memorySnippet()}`;
+}
+
+// Recover answer text from an unterminated <think> block. Some servers (vLLM w/ MiniMax) swallow
+// the closing </think> tag, leaving "reasoning\n\n\nanswer". The reasoning is English monologue;
+// the answer follows a blank-line gap. Split at the last "\n\n\n" (or the last paragraph if it
+// contains markdown / non-Latin script and the head looks like monologue).
+function recoverUnterminated(text) {
+  const t = text.replace(/\s+$/, '');
+  let i = t.lastIndexOf('\n\n\n');
+  if (i === -1) {
+    const paras = t.split(/\n\n+/);
+    if (paras.length >= 2) {
+      const head = paras.slice(0, -1).join('\n\n'), tail = paras[paras.length - 1];
+      const monologue = /\b(I|Let me|The user|I'll|I need|I should|we|Now)\b/i.test(head.slice(0, 200));
+      const answerish = /[\u0600-\u06FF\u4e00-\u9fff]|\*\*|^#|```|^\s*[-*\d]+[.)]\s/m.test(tail);
+      if (monologue && answerish) return { reasoning: head, content: tail };
+    }
+    return { reasoning: t, content: '' };
+  }
+  return { reasoning: t.slice(0, i), content: t.slice(i + 3) };
+}
+
+function splitReasoning(msg) {
+  let content = msg.content || '';
+  let reasoning = msg.reasoning_content || msg.reasoning || '';
+  const blocks = [...content.matchAll(/<think>([\s\S]*?)<\/think>/g)].map((m) => m[1]);
+  if (blocks.length) { reasoning = (reasoning + '\n' + blocks.join('\n')).trim(); content = content.replace(/<think>[\s\S]*?<\/think>/g, ''); }
+  const oi = content.indexOf('<think>');
+  if (oi !== -1) {
+    const rec = recoverUnterminated(content.slice(oi + 7));
+    reasoning = (reasoning + '\n' + rec.reasoning).trim();
+    content = content.slice(0, oi) + rec.content;
+  }
+  return { content: content.replace(/<\/?think>/g, '').trim(), reasoning: reasoning.replace(/<\/?think>/g, '').trim() };
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const RETRYABLE = new Set([408, 409, 425, 429, 500, 502, 503, 504]);
+
+// ---- streaming call: yields deltas via onDelta({type:'content'|'reasoning', text}) ----
+async function streamOnce(cfg, messages, onDelta, signal, useTools, temperature) {
+  const body = { model: cfg.model, messages, stream: true, max_tokens: cfg.maxTokens, temperature };
+  if (useTools) { body.tools = tools.SCHEMAS; body.tool_choice = 'auto'; }
+  // watchdog: abort if the provider stalls (no bytes for STALL_MS) or never answers (CONNECT_MS)
+  const ctl = new AbortController();
+  let stalled = false;
+  const onAbort = () => ctl.abort();
+  if (signal) { if (signal.aborted) throw new Error('aborted'); signal.addEventListener('abort', onAbort, { once: true }); }
+  let timer = setTimeout(() => { stalled = true; ctl.abort(); }, 45000);
+  const kick = (ms) => { clearTimeout(timer); timer = setTimeout(() => { stalled = true; ctl.abort(); }, ms); };
+  const stallErr = () => { const e = new Error('provider stalled (no data for a while)'); e.status = 504; return e; };
+  try {
+  const r = await fetch(cfg.baseUrl + '/chat/completions', {
+    method: 'POST', signal: ctl.signal,
+    headers: { authorization: 'Bearer ' + cfg.apiKey, 'content-type': 'application/json', 'HTTP-Referer': 'https://github.com/' + remote.REPO, 'X-Title': 'ORCA Agent', ...(isGateway(cfg) ? remote.authHeaders('/v1/chat/completions') : {}) },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) { const t = await r.text().catch(() => ''); const e = new Error(`HTTP ${r.status}: ${t.slice(0, 300)}`); e.status = r.status; throw e; }
+  kick(120000);
+  const ct = r.headers.get('content-type') || '';
+  if (!ct.includes('text/event-stream')) { // provider ignored stream=true
+    const j = await r.json();
+    const m = j.choices?.[0]?.message || {};
+    const sr = splitReasoning(m);
+    if (sr.reasoning) onDelta({ type: 'reasoning', text: sr.reasoning });
+    if (sr.content) onDelta({ type: 'content', text: sr.content });
+    return { content: sr.content, reasoning: sr.reasoning, tool_calls: m.tool_calls || [], usage: j.usage };
+  }
+  const reader = r.body.getReader();
+  const dec = new TextDecoder();
+  let finish = '';
+  let buf = '', content = '', reasoning = '', usage = null, inThink = false, pending = '';
+  const calls = new Map();
+  // Tag-safe splitter: <think>…</think> goes to reasoning, everything else to content.
+  // Tags may arrive split across chunks ("<thi" + "nk>"), so hold back a partial-tag tail.
+  const drain = (final) => {
+    while (pending.length) {
+      const tag = inThink ? '</think>' : '<think>';
+      const i = pending.indexOf(tag);
+      if (i !== -1) {
+        const seg = pending.slice(0, i);
+        if (seg) { if (inThink) { reasoning += seg; onDelta({ type: 'reasoning', text: seg }); } else { content += seg; onDelta({ type: 'content', text: seg }); } }
+        pending = pending.slice(i + tag.length); inThink = !inThink; continue;
+      }
+      let keep = 0;
+      if (!final) { const lt = pending.lastIndexOf('<'); if (lt !== -1 && pending.length - lt < 9 && tag.startsWith(pending.slice(lt))) keep = pending.length - lt; }
+      const seg = pending.slice(0, pending.length - keep);
+      if (seg) { if (inThink) { reasoning += seg; onDelta({ type: 'reasoning', text: seg }); } else { content += seg; onDelta({ type: 'content', text: seg }); } }
+      pending = pending.slice(pending.length - keep);
+      break;
+    }
+  };
+  const flushLine = (line) => {
+    if (!line.startsWith('data:')) return;
+    const data = line.slice(5).trim();
+    if (!data || data === '[DONE]') return;
+    let j; try { j = JSON.parse(data); } catch (_) { return; }
+    if (j.usage) usage = j.usage;
+    if (j.choices?.[0]?.finish_reason) finish = j.choices[0].finish_reason;
+    const d = j.choices?.[0]?.delta; if (!d) return;
+    const rc = d.reasoning_content || d.reasoning;
+    if (rc) { reasoning += rc; onDelta({ type: 'reasoning', text: rc }); }
+    if (d.content) { pending += d.content; drain(false); }
+    for (const tc of d.tool_calls || []) {
+      const idx = tc.index ?? 0;
+      if (!calls.has(idx)) calls.set(idx, { id: tc.id || ('call_' + idx + '_' + Date.now().toString(36)), type: 'function', function: { name: '', arguments: '' } });
+      const cur = calls.get(idx);
+      if (tc.id) cur.id = tc.id;
+      if (tc.function?.name) cur.function.name += tc.function.name;
+      if (tc.function?.arguments) cur.function.arguments += tc.function.arguments;
+    }
+  };
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    kick(90000);
+    buf += dec.decode(value, { stream: true });
+    let nl;
+    while ((nl = buf.indexOf('\n')) !== -1) { flushLine(buf.slice(0, nl).replace(/\r$/, '')); buf = buf.slice(nl + 1); }
+  }
+  if (buf.trim()) flushLine(buf.trim());
+  drain(true);
+  if (inThink && !content.trim()) {
+    // Stream ended inside an unterminated <think>: recover the answer part and re-emit it as content.
+    const rec = recoverUnterminated(reasoning);
+    if (rec.content.trim()) { reasoning = rec.reasoning; content = rec.content.trim(); onDelta({ type: 'reset' }); onDelta({ type: 'reasoning', text: reasoning }); onDelta({ type: 'content', text: content }); }
+  }
+  const sr = splitReasoning({ content, reasoning_content: reasoning });
+  return { content: sr.content, reasoning: sr.reasoning, tool_calls: [...calls.values()].filter((c) => c.function.name), usage, finish };
+  } catch (e) {
+    if (stalled && !(signal && signal.aborted)) throw stallErr();
+    throw e;
+  } finally { clearTimeout(timer); if (signal) signal.removeEventListener('abort', onAbort); }
+}
+
+async function callModel(modelKey, messages, { emit, signal, useTools = true, temperature, allowFallback = true }) {
+  const order = allowFallback ? config.fallbackOrder(modelKey) : [modelKey];
+  let last = '';
+  for (let i = 0; i < order.length; i++) {
+    const cfg = config.resolve(order[i]);
+    if (!cfg || !cfg.apiKey) continue;
+    const tries = i === 0 ? 3 : 2;
+    for (let a = 0; a < tries; a++) {
+      if (signal?.aborted) throw new Error('aborted');
+      let emitted = false;
+      try {
+        const res = await streamOnce(cfg, messages, (d) => { emitted = true; emit('delta', d); }, signal, useTools, temperature);
+        if (i > 0) emit('status', { text: L().fallback(config.resolve(modelKey)?.label || modelKey, cfg.label), kind: 'fallback' });
+        return { ...res, used: order[i], label: cfg.label };
+      } catch (e) {
+        if (signal?.aborted || e.name === 'AbortError') throw new Error('aborted');
+        last = `${cfg.label}: ${e.message}`;
+        if (emitted) emit('delta', { type: 'reset' });
+        emit('status', { text: L().retry(last.slice(0, 160)), kind: 'retry' });
+        if (e.status && !RETRYABLE.has(e.status)) break;
+        if (e.status === 504 && a >= 1) break; // stalled twice → move to next model
+        await sleep(Math.min(1000 * Math.pow(2, a), 6000));
+      }
+    }
+  }
+  throw new Error(L().allFailed + last);
+}
+
+// ---------------- runs ----------------
+const runs = new Map(); // runId -> { abort, approvals: Map<callId,{resolve}>, chatId }
+
+
+// A provider cut the stream in the middle of tool-call arguments (Dahl caps output at ~4096 tokens per
+// turn, thinking included). Recover whatever complete lines of `content` we can, plus the path if it
+// was emitted before the cut, so the work is not lost.
+function salvageArgs(partial) {
+  const pm = partial.match(/"path"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+  let path; try { path = pm ? JSON.parse('"' + pm[1] + '"') : undefined; } catch (_) { path = pm ? pm[1] : undefined; }
+  const ci = partial.search(/"content"\s*:\s*"/);
+  if (ci === -1) return { path, content: '' };
+  let raw = partial.slice(partial.indexOf('"', partial.indexOf(':', ci) + 1) + 1);
+  const m = raw.match(/^((?:[^"\\]|\\.)*)/); raw = (m ? m[1] : raw).replace(/\\$/, '').replace(/\\u[0-9a-fA-F]{0,3}$/, '');
+  let content = ''; try { content = JSON.parse('"' + raw + '"'); } catch (_) { content = raw.replace(/\\n/g, '\n').replace(/\\t/g, '\t').replace(/\\"/g, '"').replace(/\\\\/g, '\\'); }
+  const cut = content.lastIndexOf('\n');
+  return { path, content: cut > 0 ? content.slice(0, cut + 1) : '', tail: content.slice(cut + 1) };
+}
+
+function toApiMessages(history) {
+  // history from store: user/assistant messages with optional api transcript for tool exchanges
+  const out = [];
+  for (const m of history) {
+    if (m.role === 'user') out.push({ role: 'user', content: m.content });
+    else if (m.role === 'assistant') {
+      if (m.api && Array.isArray(m.api) && m.api.length) out.push(...m.api);
+      else if (m.content) out.push({ role: 'assistant', content: m.content });
+    }
+  }
+  return out;
+}
+
+const MUTATING_ALL = new Set(['write_file', 'edit_file', 'delete_file', 'run_shell', 'run_python', 'run_node', 'write_docx', 'write_xlsx', 'write_pptx', 'media_edit', 'media_concat', 'media_from_images', 'media_subtitles', 'social_download', 'generate_image', 'generate_video', 'project_init', 'task']);
+
+async function requestApproval(run, emit, call, risk) {
+  emit('approval', { id: call.id, name: call.name, args: call.args, risk });
+  return new Promise((resolve) => { run.approvals.set(call.id, resolve); });
+}
+
+/**
+ * runAgent({ chatId, history, modelKey, emit, runId, planMode, autonomy, lane })
+ * emit(event, data). Events: status, delta, thought_done, tool_call, tool_result, approval, checkpoint,
+ * question, final, error, stopped, usage
+ */
+async function runAgent(o) {
+  const { chatId, runId, emit } = o;
+  const c = config.load();
+  const modelKey = config.modelInfo(o.modelKey) ? o.modelKey : c.defaultModel;
+  const autonomy = o.autonomy || c.autonomy;
+  const maxSteps = o.maxSteps || c.maxSteps || 24;
+  const temperature = o.temperature ?? c.temperature ?? 0.5;
+  const ctl = new AbortController();
+  const run = { abort: ctl, approvals: new Map(), chatId };
+  runs.set(runId, run);
+  tools.extras.setCurrentChat(chatId);
+  const msgs = [{ role: 'system', content: systemPrompt({ planMode: o.planMode }) }, ...toApiMessages(o.history)];
+  { const td = tools.extras.loadTodos(chatId); if (td.length && o.lane !== 'sub') emit('todos', { todos: td }); }
+  const api = []; // assistant-side transcript for this run (persisted for context continuity)
+  const checkpoints = [];
+  let usedLabel = config.resolve(modelKey)?.label || modelKey;
+  let totalUsage = { prompt_tokens: 0, completion_tokens: 0 };
+  const stopped = () => ctl.signal.aborted;
+  if (o.lane !== 'sub') currentEmit = emit;
+  const seen = new Map(); // loop detector: signature -> count of failures
+  let nudges = 0, continuations = 0, carried = '';
+
+  try {
+    for (let step = 0; step < maxSteps; step++) {
+      if (stopped()) { emit('stopped', {}); return { api, checkpoints, stopped: true }; }
+      emit('status', { text: L().thinking(usedLabel, step + 1), kind: 'thinking', step: step + 1 });
+      let res;
+      const emitC = carried ? (ev, d) => { emit(ev, d); if (ev === 'delta' && d.type === 'reset') emit('delta', { type: 'content', text: carried }); } : emit;
+      let ctxMsgs = fitContext(msgs);
+      if (ctxMsgs.length < msgs.length && !o._compacted && o.lane !== 'sub') {
+        // conversation no longer fits: compact the dropped part into a brief once per run
+        o._compacted = true;
+        try { emit('status', { text: L().compacting || 'فشرده‌سازی تاریخچه…', kind: 'compact' }); const dropped = msgs.slice(1, msgs.length - ctxMsgs.length + 2).filter((m) => m.role === 'user' || m.role === 'assistant'); const brief = await compact(dropped, modelKey); if (brief) { msgs.splice(1, dropped.length, { role: 'user', content: '[system] Compact brief of the earlier conversation (auto-compaction):\n' + brief }); ctxMsgs = fitContext(msgs); emit('compacted', { chars: brief.length }); } } catch (_) {}
+      }
+      try { res = await callModel(modelKey, ctxMsgs, { emit: emitC, signal: ctl.signal, temperature }); }
+      catch (e) { if (stopped()) { emit('stopped', {}); return { api, checkpoints, stopped: true }; } emit('error', { text: e.message }); return { api, checkpoints, error: e.message }; }
+      usedLabel = res.label;
+      if (res.usage) { totalUsage.prompt_tokens += res.usage.prompt_tokens || 0; totalUsage.completion_tokens += res.usage.completion_tokens || 0; emit('usage', totalUsage); }
+      if (res.reasoning) emit('thought_done', { text: res.reasoning.slice(0, 6000) });
+
+      // Keep reasoning in the transcript sent back to the model (interleaved-thinking models like
+      // MiniMax lose the thread otherwise), but the user only ever sees clean content.
+      const apiContent = (res.reasoning ? `<think>${res.reasoning}</think>\n` : '') + (res.content || '');
+      const entry = { role: 'assistant', content: apiContent };
+      if (res.tool_calls.length) {
+        for (const tc of res.tool_calls) { try { JSON.parse(tc.function.arguments || '{}'); } catch (_) { const partial = String(tc.function.arguments || ''); tc._partial = partial; tc.function.arguments = JSON.stringify({ _truncated: true, path: (partial.match(/"path"\s*:\s*"([^"]+)"/) || [])[1] || undefined }); } }
+        entry.tool_calls = res.tool_calls.map(({ _partial, ...tc }) => tc);
+      }
+      msgs.push(entry); api.push(entry);
+
+      if (!res.tool_calls.length && res.finish === 'length' && continuations < 2 && res.content.trim()) {
+        continuations++; carried += res.content;
+        msgs.push({ role: 'user', content: '[system] Your output hit the length limit. Continue EXACTLY where you stopped — no preamble, no repetition.' }); api.push(msgs[msgs.length - 1]);
+        emit('status', { text: L().continuing || 'ادامهٔ پاسخ…', kind: 'retry' });
+        continue;
+      }
+      if (!res.tool_calls.length && res.finish === 'length' && !res.content.trim() && (o._lenNudges || 0) < 2) {
+        // The whole output budget went into thinking. Tell the model to think briefly and act.
+        o._lenNudges = (o._lenNudges || 0) + 1;
+        msgs.push({ role: 'user', content: '[system] You ran out of output budget (~4000 tokens per turn, thinking included) before producing anything. Think in at most 5 short lines, then act immediately: call the next tool with a small payload (≤100 lines) or write the answer.' }); api.push(msgs[msgs.length - 1]);
+        emit('status', { text: L().retry('output limit while thinking — retrying briefly'), kind: 'retry' });
+        continue;
+      }
+      if (!res.tool_calls.length) {
+        if (carried) res.content = carried + res.content;
+        if (!res.content.trim() && step < maxSteps - 1 && !o._nudged) {
+          o._nudged = true;
+          msgs.push({ role: 'user', content: '[system] Your previous message contained no visible answer for the user. Write the final answer now.' });
+          api.push(msgs[msgs.length - 1]);
+          emit('status', { text: L().empty, kind: 'retry' });
+          continue;
+        }
+        const text = res.content.trim() || (res.reasoning ? res.reasoning.slice(-1200) : L().noAnswer);
+        emit('final', { text, model: usedLabel, modelKey: res.used, usage: totalUsage });
+        return { api, checkpoints, text, model: usedLabel };
+      }
+
+      // ---- execute tool calls (approvals sequential, execution parallel, results in call order) ----
+      const prepared = [];
+      for (const tc of res.tool_calls) {
+        const name = tc.function.name;
+        let args = {};
+        try { args = JSON.parse(tc.function.arguments || '{}'); } catch (_) { args = {}; }
+        const broken = !!tc._partial; // provider cut the stream mid-arguments (usually a huge write_file)
+        if (broken) args = { _truncated: true, _partialLength: tc._partial.length, path: args.path };
+        prepared.push({ id: tc.id, name, args, broken, partial: tc._partial });
+      }
+      const ask = prepared.find((c) => c.name === 'ask_user');
+      if (ask) {
+        emit('question', { id: ask.id, question: ask.args.question, options: ask.args.options || [] });
+        for (const c of prepared) { const tm = { role: 'tool', tool_call_id: c.id, name: c.name, content: JSON.stringify(c.id === ask.id ? { note: 'Question shown to user. Their reply will arrive as the next user message.' } : { error: 'skipped: waiting for the user to answer your question first' }) }; msgs.push(tm); api.push(tm); }
+        emit('final', { text: res.content || ask.args.question, model: usedLabel, modelKey: res.used, usage: totalUsage, question: true });
+        return { api, checkpoints, text: res.content || ask.args.question, model: usedLabel };
+      }
+      const decisions = new Map();
+      for (const call of prepared) {
+        if (stopped()) { emit('stopped', {}); return { api, checkpoints, stopped: true }; }
+        const risk = tools.riskOf(call.name, call.args);
+        emit('tool_call', { id: call.id, name: call.name, args: call.args, risk });
+        let decision = 'allow';
+        if (o.planMode && MUTATING_ALL.has(call.name)) decision = 'deny_plan';
+        else if (autonomy === 'ask' && risk !== 'none') decision = await requestApproval(run, emit, call, risk);
+        else if (autonomy === 'auto' && risk === 'high') decision = await requestApproval(run, emit, call, risk);
+        decisions.set(call.id, decision);
+      }
+      if (stopped()) { emit('stopped', {}); return { api, checkpoints, stopped: true }; }
+      if (prepared.length > 1) emit('status', { text: L().running(prepared.length), kind: 'tools' });
+      const MUTATING = new Set(['write_file', 'edit_file', 'delete_file', 'run_shell', 'run_python', 'run_node', 'write_docx', 'write_xlsx', 'write_pptx', 'media_edit', 'media_concat', 'media_from_images', 'media_subtitles', 'project_init']);
+      const execOne = async (call) => {
+        const decision = decisions.get(call.id);
+        const t0 = Date.now();
+        let result;
+        if (decision === 'deny_plan') result = { error: 'PLAN MODE is on: write/run tools are disabled for this turn. Stop calling tools now and reply with the numbered plan, ending with "Shall I execute?" in the user\'s language (fa: اجرا کنم؟ / ru: Выполнить? / zh: 要执行吗？). (The user can turn Plan off with the Plan button in the composer.)' };
+        else if (decision !== 'allow') result = { error: 'User denied this action.' + (typeof decision === 'string' && decision.startsWith('deny:') ? ' Reason: ' + decision.slice(5) : '') };
+        else if (call.broken) {
+          const sv = call.name === 'write_file' ? salvageArgs(call.partial) : {};
+          const limitNote = `HARD LIMIT: about 4000 output tokens per turn (thinking included) ≈ 100 lines of code per tool call.`;
+          if (sv.path && sv.content && sv.content.length > 200) {
+            result = await tools.callTool('write_file', { path: sv.path, content: sv.content });
+            const lines = sv.content.split('\n'); const lastLine = lines[lines.length - 2] || '';
+            result = { ...result, partial: true, lines_written: lines.length - 1, last_line: lastLine, next_step: `Your call was cut off by the output limit; the first ${lines.length - 1} complete lines of ${sv.path} were saved. Continue the file from the line AFTER: ${JSON.stringify(lastLine.slice(0, 120))} using write_file with append=true, in parts of ≤100 lines. ${limitNote}` };
+          } else {
+            result = { error: `Your ${call.name} arguments were cut off after ${call.args._partialLength} characters — nothing was executed. ${limitNote} Re-send in parts: write_file(path, part1) then write_file(path, part2, append=true) … or split the code into several small modules.${sv.content ? ' The cut content began with: ' + JSON.stringify(sv.content.slice(0, 100)) : ''}` };
+          }
+        }
+        else result = await tools.callTool(call.name, call.args);
+        let ck = null;
+        if (result && result._diff) { ck = store.saveCheckpoint(chatId, runId, result._diff); if (ck) { checkpoints.push(ck); emit('checkpoint', { ...ck, before: result._diff.before, after: result._diff.after }); } delete result._diff; }
+        if (result && result._todos) { emit('todos', { todos: result._todos }); delete result._todos; }
+        if (result && Array.isArray(result.files) && result.files.length) emit('files', { tool: call.name, files: result.files.map((f) => (typeof f === 'string' ? f : f.path)).filter(Boolean) });
+        const out = JSON.stringify(result);
+        emit('tool_result', { id: call.id, name: call.name, ok: !(result && result.error), ms: Date.now() - t0, result: out.slice(0, 4000), truncated: out.length > 4000 });
+        return { role: 'tool', tool_call_id: call.id, name: call.name, content: out.slice(0, 14000) };
+      };
+      // read-only calls run concurrently; mutating calls run in order (relative to each other) to keep file edits deterministic
+      const results = new Array(prepared.length);
+      const readOnly = prepared.map((c, i) => [c, i]).filter(([c]) => !MUTATING.has(c.name));
+      const mutating = prepared.map((c, i) => [c, i]).filter(([c]) => MUTATING.has(c.name));
+      const ro = Promise.all(readOnly.map(async ([c, i]) => { results[i] = await execOne(c); }));
+      for (const [c, i] of mutating) { if (stopped()) break; results[i] = await execOne(c); }
+      await ro;
+      if (stopped()) { emit('stopped', {}); return { api, checkpoints, stopped: true }; }
+      for (const tm of results) { if (tm) { msgs.push(tm); api.push(tm); } }
+      // loop detection: same tool+args failing repeatedly, or the same error text coming back again and again
+      let looping = false;
+      for (const tm of results) {
+        if (!tm) continue;
+        let failed = false, errKey = '';
+        try { const j = JSON.parse(tm.content); failed = !!(j.error || (j.exit_code && j.exit_code !== 0)); errKey = failed ? String(j.error || j.output || '').replace(/\d+/g, '#').slice(0, 160) : ''; } catch (_) {}
+        if (!failed) continue;
+        const call = prepared.find((c) => c.id === tm.tool_call_id);
+        const sig = call ? call.name + ':' + JSON.stringify(call.args).slice(0, 300) : tm.tool_call_id;
+        const n1 = (seen.get(sig + '|' + errKey) || 0) + 1; seen.set(sig + '|' + errKey, n1);
+        const n2 = (seen.get('err:' + errKey) || 0) + 1; seen.set('err:' + errKey, n2);
+        if (n1 >= 2 || n2 >= 4) looping = true;
+      }
+      if (looping && nudges < 2) {
+        nudges++;
+        const nudge = { role: 'user', content: '[system] You are repeating an action that keeps failing with the same error. Do not retry it again. Take a fundamentally different approach (simplest possible, zero new dependencies), or if it is impossible, stop and explain the blocker to the user with what you have achieved so far.' };
+        msgs.push(nudge); api.push(nudge);
+        emit('status', { text: ({ fa: 'تکرار خطا شناسایی شد — تغییر رویکرد', ru: 'Обнаружен цикл — меняю подход', zh: '检测到循环 — 更换方法' })[config.load().lang] || 'Loop detected — changing approach', kind: 'retry' });
+      }
+    }
+    const text = L().cap;
+    emit('final', { text, model: usedLabel, modelKey, usage: totalUsage });
+    return { api, checkpoints, text, model: usedLabel };
+  } finally { runs.delete(runId); }
+}
+
+// ---- sub-agents: a fresh agent loop with its own context; returns the final text ----
+tools.extras.setSubagentRunner(async ({ description, prompt, model, maxSteps }) => {
+  const c = config.load();
+  const modelKey = config.modelInfo(model) ? model : (config.allModels().find((m) => m.tier === 'strong' && config.resolve(m.key)?.apiKey)?.key || c.defaultModel);
+  const runId = 'sub-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  const parent = currentEmit;
+  const events = [];
+  const emit = (ev, d) => { if (ev === 'tool_call' || ev === 'tool_result' || ev === 'status') { events.push({ ev, d }); if (parent) parent('sub_event', { runId, description, event: ev, data: ev === 'tool_result' ? { ...d, result: String(d.result || '').slice(0, 300) } : d }); } };
+  const history = [{ role: 'user', content: `You are a sub-agent of ORCA working on one delegated task. Do it fully with tools, then reply with a complete, self-contained report (facts, file paths, code snippets, blockers). Do not ask questions — decide and proceed.\n\nTASK: ${description}\n\n${prompt}` }];
+  const t0 = Date.now();
+  const r = await runAgent({ chatId: 'sub', runId, history, modelKey, emit, autonomy: 'yolo', maxSteps: maxSteps || 14, lane: 'sub' });
+  const toolsUsed = events.filter((e) => e.ev === 'tool_call').map((e) => e.d.name);
+  return { description, report: r.text || r.error || '(no report)', tools_used: toolsUsed.length, steps: toolsUsed.slice(0, 40), seconds: Math.round((Date.now() - t0) / 1000), model: r.model };
+});
+let currentEmit = null;
+
+// ---- compaction: summarize a long conversation into a compact brief (used by /compact and auto-compaction) ----
+async function compact(history, modelKey) {
+  const text = history.map((m) => `${m.role.toUpperCase()}: ${String(m.content || '').replace(/<think>[\s\S]*?<\/think>/g, '').slice(0, 3000)}`).join('\n\n').slice(-60000);
+  const prompt = `Summarize this conversation into a compact working brief for continuing the work: goals, decisions, constraints, files created/changed (paths), current state, open issues, next steps. Keep exact names, paths, commands, numbers. Max 500 words. Same language as the conversation.\n\n${text}`;
+  const fast = config.allModels().find((m) => m.tier === 'fast' && config.resolve(m.key)?.apiKey)?.key;
+  return quick(modelKey || fast || config.load().defaultModel, prompt, 1200);
+}
+
+function stopRun(runId) { const r = runs.get(runId); if (r) { r.abort.abort(); for (const [, res] of r.approvals) res('deny:stopped'); return true; } return false; }
+function approve(runId, callId, decision) { const r = runs.get(runId); const res = r?.approvals.get(callId); if (!res) return false; r.approvals.delete(callId); res(decision); return true; }
+
+// plain chat completion without tools (used for title generation etc.)
+async function quick(modelKey, prompt, maxTokens = 60) {
+  const cfg = config.resolve(modelKey) || config.resolve(config.load().defaultModel);
+  const r = await fetch(cfg.baseUrl + '/chat/completions', { method: 'POST', headers: { authorization: 'Bearer ' + cfg.apiKey, 'content-type': 'application/json', ...(isGateway(cfg) ? remote.authHeaders('/v1/chat/completions') : {}) }, body: JSON.stringify({ model: cfg.model, messages: [{ role: 'user', content: prompt }], max_tokens: maxTokens, temperature: 0.3 }) });
+  const j = await r.json();
+  return splitReasoning(j.choices?.[0]?.message || {}).content;
+}
+
+module.exports = { runAgent, stopRun, approve, quick, compact, systemPrompt, splitReasoning, routeAuto, fitContext, salvageArgs };

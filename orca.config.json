@@ -1,0 +1,9 @@
+{
+  "name": "ORCA Agent",
+  "company": "Nethyric",
+  "repo": "Nethyric/orca",
+  "gateway": "https://orca-gateway.nethyric.workers.dev",
+  "updateChannel": "stable",
+  "homepage": "https://github.com/Nethyric/orca",
+  "defaultLanguage": "en"
+}
