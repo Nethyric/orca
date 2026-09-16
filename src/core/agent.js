@@ -4,7 +4,22 @@
 const os = require('os');
 const config = require('./config');
 const remote = require('./remote');
-const isGateway = (cfg) => !!(config.GATEWAY && cfg && cfg.baseUrl && cfg.baseUrl.startsWith(config.GATEWAY));
+const vault = require('./vault');
+config.setVaultProbe(() => vault.enabled());
+
+// Expand a logical model config into the concrete upstreams to try, in order.
+//   built-in ("orca/<alias>") → live vault upstreams (rotation + cooldown handled by vault.js)
+//   anything else            → itself
+function expand(cfg) {
+  if (!vault.isVaultModel(cfg)) return [cfg];
+  return vault.candidates(vault.aliasOf(cfg)).map((u) => ({ ...cfg, baseUrl: String(u.url).replace(/\/+$/, ''), apiKey: u.key, model: u.model, maxTokens: Math.min(cfg.maxTokens || 4096, u.maxTokens || 4096), upstream: u, api: u.api || apiKind(u.url), extraHeaders: u.headers || null }));
+}
+// OpenAI-compatible everywhere except Anthropic's native Messages API
+const apiKind = (url) => (/api\.anthropic\.com/.test(url || '') ? 'anthropic' : 'openai');
+function authHeadersFor(cfg) {
+  if ((cfg.api || apiKind(cfg.baseUrl)) === 'anthropic') return { 'x-api-key': cfg.apiKey, 'anthropic-version': '2023-06-01' };
+  return { authorization: 'Bearer ' + cfg.apiKey };
+}
 const tools = require('./tools');
 const store = require('./store');
 
@@ -19,10 +34,10 @@ function memorySnippet() {
 }
 
 const STR = {
-  fa: { thinking: (m, s) => `${m} در حال فکر کردن… (مرحلهٔ ${s})`, fallback: (a, b) => `↩︎ ${a} در دسترس نبود — سوییچ به ${b}`, retry: (e) => `⚠ ${e} — تلاش مجدد`, empty: 'پاسخ خالی بود — درخواست پاسخ نهایی', allFailed: 'همهٔ مدل‌ها ناموفق بودند. آخرین خطا: ', cap: '⚠️ به سقف مراحل رسیدم. اگر بخواهید ادامه می‌دهم — بگویید «ادامه بده».', running: (n) => `اجرای ${n} ابزار به‌صورت موازی…`, noAnswer: '(پاسخ خالی)', compacting: 'گفتگو طولانی شد — فشرده‌سازی خودکار تاریخچه…', continuing: 'ادامهٔ پاسخ…' },
-  en: { thinking: (m, s) => `${m} is thinking… (step ${s})`, fallback: (a, b) => `↩︎ ${a} unavailable — switched to ${b}`, retry: (e) => `⚠ ${e} — retrying`, empty: 'Empty answer — requesting final answer', allFailed: 'All models failed. Last error: ', cap: '⚠️ Step limit reached. Say "continue" and I will carry on.', running: (n) => `running ${n} tools in parallel…`, noAnswer: '(empty answer)', compacting: 'Long conversation — auto-compacting history…', continuing: 'continuing…' },
-  ru: { thinking: (m, s) => `${m} думает… (шаг ${s})`, fallback: (a, b) => `↩︎ ${a} недоступна — переключение на ${b}`, retry: (e) => `⚠ ${e} — повтор`, empty: 'Пустой ответ — запрашиваю финальный ответ', allFailed: 'Все модели недоступны. Последняя ошибка: ', cap: '⚠️ Достигнут лимит шагов. Напишите «продолжай», и я продолжу.', running: (n) => `выполняю ${n} инструментов параллельно…`, noAnswer: '(пустой ответ)', compacting: 'Долгий диалог — автоматическое сжатие истории…', continuing: 'продолжаю…' },
-  zh: { thinking: (m, s) => `${m} 正在思考…（第 ${s} 步）`, fallback: (a, b) => `↩︎ ${a} 不可用 — 已切换到 ${b}`, retry: (e) => `⚠ ${e} — 重试中`, empty: '回答为空 — 请求最终回答', allFailed: '所有模型均失败。最后错误：', cap: '⚠️ 已达到步骤上限。说“继续”我会接着做。', running: (n) => `并行运行 ${n} 个工具…`, noAnswer: '（空回答）', compacting: '对话过长 — 自动压缩历史…', continuing: '继续…' },
+  fa: { vaultDown: 'مدل‌های داخلی در دسترس نیستند (اتصال به GitHub برقرار نشد). کلید خودتان را در تنظیمات اضافه کنید یا بعداً دوباره امتحان کنید.', thinking: (m, s) => `${m} در حال فکر کردن… (مرحلهٔ ${s})`, fallback: (a, b) => `↩︎ ${a} در دسترس نبود — سوییچ به ${b}`, retry: (e) => `⚠ ${e} — تلاش مجدد`, empty: 'پاسخ خالی بود — درخواست پاسخ نهایی', allFailed: 'همهٔ مدل‌ها ناموفق بودند. آخرین خطا: ', cap: '⚠️ به سقف مراحل رسیدم. اگر بخواهید ادامه می‌دهم — بگویید «ادامه بده».', running: (n) => `اجرای ${n} ابزار به‌صورت موازی…`, noAnswer: '(پاسخ خالی)', compacting: 'گفتگو طولانی شد — فشرده‌سازی خودکار تاریخچه…', continuing: 'ادامهٔ پاسخ…' },
+  en: { vaultDown: 'Built-in models unavailable (could not reach GitHub). Add your own key in Settings or try again later.', thinking: (m, s) => `${m} is thinking… (step ${s})`, fallback: (a, b) => `↩︎ ${a} unavailable — switched to ${b}`, retry: (e) => `⚠ ${e} — retrying`, empty: 'Empty answer — requesting final answer', allFailed: 'All models failed. Last error: ', cap: '⚠️ Step limit reached. Say "continue" and I will carry on.', running: (n) => `running ${n} tools in parallel…`, noAnswer: '(empty answer)', compacting: 'Long conversation — auto-compacting history…', continuing: 'continuing…' },
+  ru: { vaultDown: 'Встроенные модели недоступны (нет связи с GitHub). Добавьте свой ключ в настройках или повторите позже.', thinking: (m, s) => `${m} думает… (шаг ${s})`, fallback: (a, b) => `↩︎ ${a} недоступна — переключение на ${b}`, retry: (e) => `⚠ ${e} — повтор`, empty: 'Пустой ответ — запрашиваю финальный ответ', allFailed: 'Все модели недоступны. Последняя ошибка: ', cap: '⚠️ Достигнут лимит шагов. Напишите «продолжай», и я продолжу.', running: (n) => `выполняю ${n} инструментов параллельно…`, noAnswer: '(пустой ответ)', compacting: 'Долгий диалог — автоматическое сжатие истории…', continuing: 'продолжаю…' },
+  zh: { vaultDown: '内置模型不可用（无法连接 GitHub）。请在设置中添加自己的密钥或稍后重试。', thinking: (m, s) => `${m} 正在思考…（第 ${s} 步）`, fallback: (a, b) => `↩︎ ${a} 不可用 — 已切换到 ${b}`, retry: (e) => `⚠ ${e} — 重试中`, empty: '回答为空 — 请求最终回答', allFailed: '所有模型均失败。最后错误：', cap: '⚠️ 已达到步骤上限。说“继续”我会接着做。', running: (n) => `并行运行 ${n} 个工具…`, noAnswer: '（空回答）', compacting: '对话过长 — 自动压缩历史…', continuing: '继续…' },
 };
 const L = () => STR[config.load().lang] || STR.en;
 
@@ -78,7 +93,7 @@ function systemPrompt(opts = {}) {
 PLAN MODE IS ON: do NOT modify anything. Investigate (read files, search) as needed, then reply with a concise numbered implementation plan (files to create/change, commands to run, risks). End with exactly the phrase "Shall I execute?" translated into the user's language (fa: "اجرا کنم؟", ru: "Выполнить?", zh: "要执行吗？") and wait.` : '';
   return `You are ORCA, an elite autonomous AI agent running as a desktop app on the user's computer (${os.platform()} ${os.release()} ${os.arch()}). Date: ${new Date().toISOString().slice(0, 10)}.
 
-TOOLS (real, executed on this machine — never fake a result): shell (${process.platform === 'win32' ? 'cmd.exe by default; PowerShell auto-detected' : 'bash'}), run_node (always available), ${py ? 'run_python (' + py + ')' : 'NO Python — use run_node'}, files (read_file/write_file/edit_file/delete_file/list_files/glob/grep) in workspace "${ws}" (shell cwd; relative paths resolve there), diagnostics (syntax check), todo_write/todo_read (visible checklist), task (sub-agents with fresh context, run in parallel), web_search + fetch_page + http_request, VISION: view_image (OCR eng+fas${vision ? ' + vision model ' + vision.model : '; no vision model configured — text-only models, OCR is what you get'}), screenshot (headless Chrome), SOCIAL: social_download (Instagram/TikTok/X/YouTube/… videos, photos, carousels, profiles, playlists → downloads/), social_trending (TikTok explore feed & search, YouTube trending, X trends, Instagram user posts; download=true to fetch), GENERATE: generate_image (text→image, free provider built in), generate_video (text→video; real T2V with a Replicate/fal key, otherwise animated AI key-frames), OFFICE: write_docx/read_docx (Word), write_xlsx/read_xlsx (Excel, formulas, csv), write_pptx (designed PowerPoint decks), read_pdf, MEDIA (built-in ffmpeg, no install): media_info, media_edit (trim/convert/resize/compress/extract_audio/speed/gif/thumbnail/text watermark/crop/rotate/volume/fade), media_concat, media_from_images (slideshow), media_subtitles; remember/recall long-term memory, project_init (ORCA.md project memory), ask_user.
+TOOLS (real, executed on this machine — never fake a result): shell (${process.platform === 'win32' ? 'cmd.exe by default; PowerShell auto-detected' : 'bash'}), run_node (always available), ${py ? 'run_python (' + py + ')' : 'NO Python — use run_node'}, files (read_file/write_file/edit_file/delete_file/list_files/glob/grep) in workspace "${ws}" (shell cwd; relative paths resolve there), diagnostics (syntax check), todo_write/todo_read (visible checklist), task (sub-agents with fresh context, run in parallel), web_search + fetch_page + http_request, VISION: view_image (OCR eng+fas${vision ? ' + vision model ' + vision.model : '; no vision model configured — text-only models, OCR is what you get'}), screenshot (headless Chrome), browser_check (headless Chrome: runtime errors + screenshot of any HTML/URL — use it instead of installing playwright/puppeteer), SOCIAL: social_download (Instagram/TikTok/X/YouTube/… videos, photos, carousels, profiles, playlists → downloads/), social_trending (TikTok explore feed & search, YouTube trending, X trends, Instagram user posts; download=true to fetch), GENERATE: generate_image (text→image, free provider built in), generate_video (text→video; real T2V with a Replicate/fal key, otherwise animated AI key-frames), OFFICE: write_docx/read_docx (Word), write_xlsx/read_xlsx (Excel, formulas, csv), write_pptx (designed PowerPoint decks), read_pdf, MEDIA (built-in ffmpeg, no install): media_info, media_edit (trim/convert/resize/compress/extract_audio/speed/gif/thumbnail/text watermark/crop/rotate/volume/fade), media_concat, media_from_images (slideshow), media_subtitles; remember/recall long-term memory, project_init (ORCA.md project memory), ask_user.
 
 HOW TO WORK
 - Act first, ask only when a wrong guess would be costly. Never open with a questionnaire: pick sensible defaults, state them in one line, and start building; the user can redirect you. If the user answers a question with a bare choice/token/number, that IS the answer — continue immediately. Decompose big goals; call independent tools together in one turn (they run in parallel).
@@ -86,6 +101,7 @@ HOW TO WORK
 - Build real things end-to-end: create files, run them, read errors, fix, re-run. Never stop at "you could…" when you can do it.
 - OUTPUT LIMIT: about 4000 tokens per turn, thinking included. Never put more than ~100 lines (≈4 KB) in one tool call. Split code into small modules (e.g. api.js, handlers.js, store.js, main.js), or write the first ~100 lines and continue with write_file(append=true). Keep thinking short when you are about to write code. One giant call gets cut off and wastes minutes.
 - Verify: after writing code run it or test it; after edits re-read if unsure. Own your mistakes and fix them.
+- Stay on task: do exactly what the current message asks; never run unrelated tools (e.g. social_trending or generate_image) unless the user asked for that in this conversation.
 - Prefer zero-dependency solutions (node:test/assert, python stdlib, plain HTML/CSS/JS) over installing frameworks unless asked. If the same command fails twice, do NOT retry variations of it — change approach (simplify, drop the dependency) or report the blocker.
 - Unsure facts (news, prices, versions, docs, dates): web_search, then fetch_page the best 1-3 sources, cite URLs.
 - Math/data: compute with run_node or run_python, never in your head.
@@ -96,6 +112,7 @@ HOW TO WORK
 - Multi-step jobs (3+ steps): first call todo_write with the full checklist, then keep statuses current (in_progress → done) as you work; the user watches it live. Big independent sub-problems → task sub-agents in parallel.
 - Images the user attaches are saved under attachments/ and pre-analyzed for you (OCR text${vision ? ' + vision description' : ''} appears inside <attached_image>). Use view_image on any image path/URL to inspect it (question= what to look for). Never claim you cannot see images without trying view_image first; if only OCR is available, say what the OCR read and what could not be determined.
 - Social media: for "download this link" use social_download directly (no research needed). For "trending/explore/popular videos" use social_trending (platform, region, query, download=true, max_download). Instagram Explore/stories/private content need the user's cookies — say so briefly and offer the alternatives instead of failing silently. Report every saved file path.
+- WEB APPS, SITES & GAMES: build them properly, not as demos. Structure: index.html + style.css + main.js (+ modules) unless the user asks for a single file. Include a real layout (header/nav/hero/sections/footer for sites; HUD, menu, pause, game-over, restart, best score for games), responsive CSS, keyboard + touch input, sensible defaults, no external CDNs (offline must work), no placeholder lorem ipsum. After writing, ALWAYS run browser_check on the entry HTML: it loads the page in headless Chrome, reports console errors/uncaught exceptions and takes a screenshot — fix every error and re-check before you answer. If browser_check is unavailable, run a quick node --check on the JS and a static sanity pass (matching braces, referenced ids exist). Tell the user the path and that they can open it from the Files tab.
 - Final answer: concise Markdown in the user's language (default ${lang}); code, commands and paths in English. State what you did, results, file paths. Files you produced (images, videos, docs) → list their paths so the UI can preview them. No tool-output dumps unless asked.${effort}${plan}${persona}${rules}${projectMemory()}${memorySnippet()}`;
 }
 
@@ -149,9 +166,10 @@ async function streamOnce(cfg, messages, onDelta, signal, useTools, temperature)
   const kick = (ms) => { clearTimeout(timer); timer = setTimeout(() => { stalled = true; ctl.abort(); }, ms); };
   const stallErr = () => { const e = new Error('provider stalled (no data for a while)'); e.status = 504; return e; };
   try {
+  if ((cfg.api || apiKind(cfg.baseUrl)) === 'anthropic') return await anthropicOnce(cfg, messages, onDelta, ctl, kick, useTools, temperature);
   const r = await fetch(cfg.baseUrl + '/chat/completions', {
     method: 'POST', signal: ctl.signal,
-    headers: { authorization: 'Bearer ' + cfg.apiKey, 'content-type': 'application/json', 'HTTP-Referer': 'https://github.com/' + remote.REPO, 'X-Title': 'ORCA Agent', ...(isGateway(cfg) ? remote.authHeaders('/v1/chat/completions') : {}) },
+    headers: { ...authHeadersFor(cfg), 'content-type': 'application/json', 'HTTP-Referer': 'https://github.com/' + remote.REPO, 'X-Title': 'ORCA', ...(cfg.extraHeaders || {}) },
     body: JSON.stringify(body),
   });
   if (!r.ok) { const t = await r.text().catch(() => ''); const e = new Error(`HTTP ${r.status}: ${t.slice(0, 300)}`); e.status = r.status; throw e; }
@@ -236,24 +254,32 @@ async function callModel(modelKey, messages, { emit, signal, useTools = true, te
   const order = allowFallback ? config.fallbackOrder(modelKey) : [modelKey];
   let last = '';
   for (let i = 0; i < order.length; i++) {
-    const cfg = config.resolve(order[i]);
-    if (!cfg || !cfg.apiKey) continue;
-    const tries = i === 0 ? 3 : 2;
-    for (let a = 0; a < tries; a++) {
-      if (signal?.aborted) throw new Error('aborted');
-      let emitted = false;
-      try {
-        const res = await streamOnce(cfg, messages, (d) => { emitted = true; emit('delta', d); }, signal, useTools, temperature);
-        if (i > 0) emit('status', { text: L().fallback(config.resolve(modelKey)?.label || modelKey, cfg.label), kind: 'fallback' });
-        return { ...res, used: order[i], label: cfg.label };
-      } catch (e) {
-        if (signal?.aborted || e.name === 'AbortError') throw new Error('aborted');
-        last = `${cfg.label}: ${e.message}`;
-        if (emitted) emit('delta', { type: 'reset' });
-        emit('status', { text: L().retry(last.slice(0, 160)), kind: 'retry' });
-        if (e.status && !RETRYABLE.has(e.status)) break;
-        if (e.status === 504 && a >= 1) break; // stalled twice → move to next model
-        await sleep(Math.min(1000 * Math.pow(2, a), 6000));
+    const logical = config.resolve(order[i]);
+    if (!logical || !logical.apiKey) continue;
+    if (vault.isVaultModel(logical) && !vault.current()) { await vault.refresh().catch(() => {}); if (!vault.current()) { last = `${logical.label}: ${L().vaultDown}`; continue; } }
+    const ups = expand(logical);
+    if (!ups.length) { last = `${logical.label}: ${L().vaultDown}`; continue; }
+    for (let u = 0; u < ups.length; u++) {
+      const cfg = ups[u];
+      const tries = i === 0 && u === 0 ? 3 : 2;
+      let moveOn = false;
+      for (let a = 0; a < tries && !moveOn; a++) {
+        if (signal?.aborted) throw new Error('aborted');
+        let emitted = false;
+        try {
+          const res = await streamOnce(cfg, messages, (d) => { emitted = true; emit('delta', d); }, signal, useTools, temperature);
+          if (i > 0) emit('status', { text: L().fallback(config.resolve(modelKey)?.label || modelKey, cfg.label), kind: 'fallback' });
+          return { ...res, used: order[i], label: cfg.label };
+        } catch (e) {
+          if (signal?.aborted || e.name === 'AbortError') throw new Error('aborted');
+          last = `${cfg.label}: ${e.message}`;
+          if (emitted) emit('delta', { type: 'reset' });
+          emit('status', { text: L().retry(last.slice(0, 160)), kind: 'retry' });
+          if (cfg.upstream && (e.status === 401 || e.status === 402 || e.status === 403 || e.status === 429 || e.status >= 500)) { vault.markBad(cfg.upstream, e.status); moveOn = true; break; } // next key
+          if (e.status && !RETRYABLE.has(e.status)) { u = ups.length; break; } // hard error → next model
+          if (e.status === 504 && a >= 1) break; // stalled twice → move on
+          await sleep(Math.min(1000 * Math.pow(2, a), 6000));
+        }
       }
     }
   }
@@ -502,10 +528,68 @@ function approve(runId, callId, decision) { const r = runs.get(runId); const res
 
 // plain chat completion without tools (used for title generation etc.)
 async function quick(modelKey, prompt, maxTokens = 60) {
-  const cfg = config.resolve(modelKey) || config.resolve(config.load().defaultModel);
-  const r = await fetch(cfg.baseUrl + '/chat/completions', { method: 'POST', headers: { authorization: 'Bearer ' + cfg.apiKey, 'content-type': 'application/json', ...(isGateway(cfg) ? remote.authHeaders('/v1/chat/completions') : {}) }, body: JSON.stringify({ model: cfg.model, messages: [{ role: 'user', content: prompt }], max_tokens: maxTokens, temperature: 0.3 }) });
-  const j = await r.json();
-  return splitReasoning(j.choices?.[0]?.message || {}).content;
+  const logical = config.resolve(modelKey) || config.resolve(config.load().defaultModel);
+  if (!logical) throw new Error('no model');
+  if (vault.isVaultModel(logical) && !vault.current()) await vault.refresh().catch(() => {});
+  let last = '';
+  for (const cfg of expand(logical)) {
+    try {
+      if ((cfg.api || apiKind(cfg.baseUrl)) === 'anthropic') {
+        const r = await fetch(cfg.baseUrl + '/messages', { method: 'POST', headers: { ...authHeadersFor(cfg), 'content-type': 'application/json' }, body: JSON.stringify({ model: cfg.model, max_tokens: maxTokens, messages: [{ role: 'user', content: prompt }] }) });
+        if (!r.ok) throw Object.assign(new Error('HTTP ' + r.status), { status: r.status });
+        const j = await r.json(); return (j.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('');
+      }
+      const r = await fetch(cfg.baseUrl + '/chat/completions', { method: 'POST', headers: { ...authHeadersFor(cfg), 'content-type': 'application/json', ...(cfg.extraHeaders || {}) }, body: JSON.stringify({ model: cfg.model, messages: [{ role: 'user', content: prompt }], max_tokens: maxTokens, temperature: 0.3 }) });
+      if (!r.ok) { if (cfg.upstream) vault.markBad(cfg.upstream, r.status); throw Object.assign(new Error('HTTP ' + r.status), { status: r.status }); }
+      const j = await r.json();
+      return splitReasoning(j.choices?.[0]?.message || {}).content;
+    } catch (e) { last = e.message; }
+  }
+  throw new Error(last || 'no upstream');
+}
+
+// ---- Anthropic Messages API (bring-your-own Claude key) → same delta/tool_calls shape as the OpenAI path ----
+async function anthropicOnce(cfg, messages, onDelta, ctl, kick, useTools, temperature) {
+  const sys = messages.filter((m) => m.role === 'system').map((m) => (typeof m.content === 'string' ? m.content : '')).join('\n\n');
+  const conv = [];
+  for (const m of messages) {
+    if (m.role === 'system') continue;
+    if (m.role === 'tool') { const last = conv[conv.length - 1]; const block = { type: 'tool_result', tool_use_id: m.tool_call_id, content: String(m.content || '').slice(0, 60000) }; if (last && last.role === 'user' && Array.isArray(last.content) && last.content[0]?.type === 'tool_result') last.content.push(block); else conv.push({ role: 'user', content: [block] }); continue; }
+    if (m.role === 'assistant') { const blocks = []; if (m.content) blocks.push({ type: 'text', text: String(m.content) }); for (const tc of (m.tool_calls || [])) { let input = {}; try { input = JSON.parse(tc.function.arguments || '{}'); } catch (_) {} blocks.push({ type: 'tool_use', id: tc.id, name: tc.function.name, input }); } if (blocks.length) conv.push({ role: 'assistant', content: blocks }); continue; }
+    // user (string or multimodal parts)
+    if (Array.isArray(m.content)) conv.push({ role: 'user', content: m.content.map((p) => p.type === 'image_url' ? (() => { const mm = /^data:(.*?);base64,(.*)$/.exec(p.image_url?.url || ''); return mm ? { type: 'image', source: { type: 'base64', media_type: mm[1], data: mm[2] } } : { type: 'text', text: '[image]' }; })() : { type: 'text', text: p.text || '' }) });
+    else conv.push({ role: 'user', content: String(m.content || '') });
+  }
+  const body = { model: cfg.model, max_tokens: cfg.maxTokens || 4096, stream: true, messages: conv, ...(sys ? { system: sys } : {}), ...(temperature != null ? { temperature } : {}) };
+  if (useTools) body.tools = tools.SCHEMAS.map((t) => ({ name: t.function.name, description: t.function.description, input_schema: t.function.parameters || { type: 'object', properties: {} } }));
+  const r = await fetch(cfg.baseUrl + '/messages', { method: 'POST', signal: ctl.signal, headers: { ...authHeadersFor(cfg), 'content-type': 'application/json', ...(cfg.extraHeaders || {}) }, body: JSON.stringify(body) });
+  if (!r.ok) { const t = await r.text().catch(() => ''); const e = new Error(`HTTP ${r.status}: ${t.slice(0, 300)}`); e.status = r.status; throw e; }
+  kick(120000);
+  const reader = r.body.getReader(); const dec = new TextDecoder();
+  let buf = '', content = '', reasoning = '', usage = null, finish = '';
+  const blocks = new Map(); // index → { type, id, name, json }
+  const calls = [];
+  while (true) {
+    const { value, done } = await reader.read(); if (done) break; kick(45000);
+    buf += dec.decode(value, { stream: true });
+    let idx;
+    while ((idx = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, idx).trim(); buf = buf.slice(idx + 1);
+      if (!line.startsWith('data:')) continue;
+      let ev; try { ev = JSON.parse(line.slice(5).trim()); } catch (_) { continue; }
+      if (ev.type === 'content_block_start') { blocks.set(ev.index, { type: ev.content_block.type, id: ev.content_block.id, name: ev.content_block.name, json: '' }); }
+      else if (ev.type === 'content_block_delta') {
+        const b = blocks.get(ev.index) || {};
+        if (ev.delta.type === 'text_delta') { content += ev.delta.text; onDelta({ type: 'content', text: ev.delta.text }); }
+        else if (ev.delta.type === 'thinking_delta') { reasoning += ev.delta.thinking; onDelta({ type: 'reasoning', text: ev.delta.thinking }); }
+        else if (ev.delta.type === 'input_json_delta') { b.json += ev.delta.partial_json; }
+      } else if (ev.type === 'content_block_stop') { const b = blocks.get(ev.index); if (b && b.type === 'tool_use') calls.push({ id: b.id, type: 'function', function: { name: b.name, arguments: b.json || '{}' } }); }
+      else if (ev.type === 'message_delta') { finish = ev.delta?.stop_reason || finish; if (ev.usage) usage = { completion_tokens: ev.usage.output_tokens }; }
+      else if (ev.type === 'message_start' && ev.message?.usage) usage = { prompt_tokens: ev.message.usage.input_tokens };
+      else if (ev.type === 'error') { const e = new Error(ev.error?.message || 'stream error'); e.status = 502; throw e; }
+    }
+  }
+  return { content, reasoning, tool_calls: calls, usage, finish: finish === 'max_tokens' ? 'length' : finish };
 }
 
 module.exports = { runAgent, stopRun, approve, quick, compact, systemPrompt, splitReasoning, routeAuto, fitContext, salvageArgs };

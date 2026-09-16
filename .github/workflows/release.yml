@@ -21,7 +21,7 @@ jobs:
         run: node scripts/fetch-bins.js
       - name: Build portable zip
         env:
-          ORCA_BUILD_TOKEN: ${{ secrets.BUILD_TOKEN }}
+          ORCA_VAULT_KEY: ${{ secrets.ORCA_VAULT_KEY }}
         run: npm run dist:win
       - name: Checksums
         run: cd release && sha256sum *.zip > SHA256SUMS
@@ -31,6 +31,7 @@ jobs:
           files: |
             release/*.zip
             release/SHA256SUMS
+            remote/vault.json
           generate_release_notes: true
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}

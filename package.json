@@ -1,8 +1,8 @@
 {
   "name": "orca-agent",
   "productName": "ORCA Agent",
-  "version": "1.5.0",
-  "description": "ORCA Agent — autonomous multi-model AI agent (desktop). Open source by Nethyric.",
+  "version": "0.0.1",
+  "description": "ORCA — autonomous multi-model AI agent for your desktop. Open source by Nethyric.",
   "main": "src/main.js",
   "author": "Nethyric",
   "license": "MIT",
@@ -12,7 +12,10 @@
     "dist:win": "node scripts/bake.js && electron-builder --win --x64 && node scripts/finish-win.js",
     "fetch-bins": "node scripts/fetch-bins.js",
     "set-repo": "node scripts/set-repo.js",
-    "gateway:deploy": "cd gateway && npx wrangler deploy"
+    "vault:keygen": "node scripts/vault.js keygen --write",
+    "vault:seal": "node scripts/vault.js seal remote/vault.json",
+    "vault:check": "node scripts/vault.js check",
+    "test": "node --test test/"
   },
   "devDependencies": {
     "electron": "33.4.11",

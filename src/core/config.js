@@ -7,34 +7,32 @@ const os = require('os');
 let DATA_DIR = path.join(os.homedir(), '.orca');
 
 const APP = (() => { try { return require('../../orca.config.json'); } catch (_) { return {}; } })();
-const GATEWAY = (process.env.ORCA_GATEWAY || APP.gateway || '').replace(/\/+$/, '');
 
-// No provider keys ship with the app. Built-in models are served through the ORCA gateway
-// (a tiny Cloudflare Worker that holds the real keys — see gateway/). Users may add their own
-// keys/providers in Settings; those are stored only on their machine.
-const DEFAULT_KEYS = { gateway: '', dahl: '', tokenrouter: '', openrouter: '' };
-
+// No provider keys ship with the app in plain text. Built-in models are served from the Sealed Vault
+// (remote/vault.json in the GitHub repo — ciphertext that only the app can open, see vault.js). Users can
+// add their own providers in Settings → Providers; those keys are stored only on their machine.
 const PROVIDERS = {
-  gateway:     { label: 'ORCA Cloud',  baseUrl: GATEWAY ? GATEWAY + '/v1' : '', keyName: 'gateway', builtin: true, hidden: true },
-  openrouter:  { label: 'OpenRouter',  baseUrl: 'https://openrouter.ai/api/v1',     keyName: 'openrouter' },
-  dahl:        { label: 'Dahl',        baseUrl: 'https://inference.dahl.global/v1', keyName: 'dahl' },
-  tokenrouter: { label: 'TokenRouter', baseUrl: 'https://api.tokenrouter.com/v1',   keyName: 'tokenrouter' },
+  // brand-neutral built-in slot; the vault decides which upstream serves each alias right now
+  vault: { label: 'Built-in', baseUrl: '', keyName: 'vault', builtin: true, hidden: true },
 };
 
-// Built-in models (served via the gateway; the gateway maps these ids to whatever upstream is live right now).
-// Order = fallback priority. The remote config can override/extend this list without a new release.
+// Built-in models (served via the vault; alias → whatever upstream is live right now).
+// Order = fallback priority. The vault can override/extend this list without a new release.
 const BUILTIN_MODELS = [
-  { key: 'minimax',  label: 'MiniMax M2.7',      vendor: 'MiniMax',  provider: 'gateway', model: 'orca/minimax',  maxTokens: 16384, tier: 'strong', note: { fa: 'قوی‌ترین — استدلال عمیق', en: 'Strongest — deep reasoning', ru: 'Самая сильная — глубокие рассуждения', zh: '最强 — 深度推理' } },
-  { key: 'deepseek', label: 'DeepSeek V4 Flash', vendor: 'DeepSeek', provider: 'gateway', model: 'orca/deepseek', maxTokens: 16384, tier: 'fast',   note: { fa: 'سریع‌ترین — پاسخ تمیز', en: 'Fastest — clean answers', ru: 'Самая быстрая — чистые ответы', zh: '最快 — 简洁回答' } },
-  { key: 'glm',      label: 'GLM 5.3',           vendor: 'Zhipu',    provider: 'gateway', model: 'orca/glm',      maxTokens: 3000,  tier: 'backup', note: { fa: 'پشتیبان', en: 'Backup', ru: 'Резервная', zh: '备用' } },
+  { key: 'minimax',  label: 'MiniMax M2.7',      vendor: 'MiniMax',  provider: 'vault', model: 'orca/minimax',  maxTokens: 4096, tier: 'strong', note: { fa: 'قوی‌ترین — استدلال عمیق و کارهای طولانی', en: 'Strongest — deep reasoning, long tasks', ru: 'Самая сильная — глубокие рассуждения, долгие задачи', zh: '最强 — 深度推理、长任务' } },
+  { key: 'deepseek', label: 'DeepSeek V4 Flash', vendor: 'DeepSeek', provider: 'vault', model: 'orca/deepseek', maxTokens: 4096, tier: 'fast',   note: { fa: 'سریع‌ترین — پاسخ تمیز و کوتاه', en: 'Fastest — clean, concise answers', ru: 'Самая быстрая — чёткие короткие ответы', zh: '最快 — 简洁清晰的回答' } },
+  { key: 'glm',      label: 'GLM 5.3 Flash',     vendor: 'Zhipu',    provider: 'vault', model: 'orca/glm',      maxTokens: 4096, tier: 'backup', note: { fa: 'پشتیبان', en: 'Backup', ru: 'Резерв', zh: '备用' } },
 ];
-let remoteModels = null; // set by remote.js when the gateway/remote config publishes a model list
-function setRemoteModels(list) { remoteModels = Array.isArray(list) && list.length ? list.map((m) => ({ maxTokens: 8192, provider: 'gateway', tier: 'custom', ...m })) : null; _cfg = null; }
+let remoteModels = null; // set by vault.js when the vault publishes a model list
+function setRemoteModels(list) { remoteModels = Array.isArray(list) && list.length ? list.map((m) => ({ maxTokens: 4096, provider: 'vault', tier: 'custom', ...m })) : null; _cfg = null; }
 function builtinModels() { return remoteModels || BUILTIN_MODELS; }
 
+// ---- user providers (bring your own key) ----
+// cfg.providers = { [providerId]: { apiKey, baseUrl?, name?, models: [{ id, name?, maxTokens?, reasoning?, toolCall? }] } }
+// providerId is a models.dev id ('openai', 'anthropic', 'openrouter', 'groq', …) or a user-defined id for any OpenAI-compatible endpoint.
 const DEFAULT_CONFIG = {
-  keys: { ...DEFAULT_KEYS },
-  customModels: [],          // { key, label, provider:'openrouter'|'custom', baseUrl?, apiKey?, model, maxTokens }
+  providers: {},             // bring-your-own-key providers (see above)
+  customModels: [],          // legacy (< 0.0.1) custom models: { key, label, provider, baseUrl?, apiKey?, model, maxTokens }
   defaultModel: 'auto',
   compareModels: ['minimax', 'deepseek'],
   autonomy: 'auto',          // 'ask' | 'auto' | 'yolo'
@@ -59,8 +57,8 @@ const DEFAULT_CONFIG = {
   shellTimeout: 120,
   webSearchEngine: 'auto',
   // 1.4: vision / generation / social
-  vision: { provider: 'openrouter', model: '', baseUrl: '', apiKey: '' },   // any OpenAI-compatible vision model; empty model + OpenRouter key → free default
-  imageGen: { provider: '', baseUrl: '', apiKey: '', model: '' },           // '' = free built-in provider | 'openai' (/images/generations) | 'openrouter'
+  vision: { provider: '', model: '', baseUrl: '', apiKey: '' },   // '' = auto (any user provider with an image-capable model) | <providerId> | 'custom' (baseUrl + apiKey + model)
+  imageGen: { provider: '', baseUrl: '', apiKey: '', model: '' },           // '' = free built-in provider | 'openai' (= any /images/generations API) | <providerId> (chat model with image output)
   videoGen: { provider: '', apiKey: '', model: '' },                       // '' = animated key-frames | 'replicate' | 'fal'
   cookiesFile: '',                                                          // cookies.txt for login-walled social content
   cookiesBrowser: '',                                                       // 'chrome' | 'firefox' | 'edge' … (yt-dlp --cookies-from-browser)
@@ -83,7 +81,8 @@ function load() {
   if (_cfg) return _cfg;
   let saved = {};
   try { saved = JSON.parse(fs.readFileSync(configPath(), 'utf8')); } catch (_) {}
-  _cfg = { ...DEFAULT_CONFIG, ...saved, keys: { ...DEFAULT_KEYS, ...(saved.keys || {}) } };
+  _cfg = { ...DEFAULT_CONFIG, ...saved, providers: (saved.providers && typeof saved.providers === 'object') ? saved.providers : {} };
+  delete _cfg.keys; // pre-0.0.1 layout
   for (const k of ['vision', 'imageGen', 'videoGen']) _cfg[k] = { ...DEFAULT_CONFIG[k], ...((saved[k] && typeof saved[k] === 'object') ? saved[k] : {}) };
   if (!Array.isArray(_cfg.customModels)) _cfg.customModels = [];
   return _cfg;
@@ -91,7 +90,12 @@ function load() {
 function save(patch) {
   const c = load();
   if (patch) {
-    if (patch.keys) { c.keys = { ...c.keys, ...patch.keys }; delete patch.keys; }
+    delete patch.keys;
+    if (patch.providers && typeof patch.providers === 'object') { // merge per provider; empty apiKey keeps the stored one, null removes the provider
+      const nx = { ...c.providers };
+      for (const [id, pv] of Object.entries(patch.providers)) { if (pv === null) { delete nx[id]; continue; } const cur = nx[id] || {}; const m = { ...cur, ...pv }; if (!pv.apiKey) m.apiKey = cur.apiKey || ''; nx[id] = m; }
+      c.providers = nx; delete patch.providers;
+    }
     for (const k of ['vision', 'imageGen', 'videoGen']) if (patch[k] && typeof patch[k] === 'object') { const nx = { ...c[k] }; for (const [kk, vv] of Object.entries(patch[k])) { if (kk === 'apiKey' && (vv == null || String(vv).includes('…'))) continue; nx[kk] = vv; } c[k] = nx; delete patch[k]; }
     Object.assign(c, patch);
   }
@@ -110,6 +114,9 @@ function workspaceDir() {
 function allModels() {
   const c = load();
   const list = builtinModels().map((m) => ({ ...m, builtin: true }));
+  for (const [pid, pv] of Object.entries(c.providers || {})) {
+    for (const m of (pv.models || [])) list.push({ key: `${pid}/${m.id}`, label: m.name || m.id, vendor: pv.name || pid, provider: pid, model: m.id, maxTokens: m.maxTokens || 8192, tier: m.tier || 'custom', builtin: false, reasoning: !!m.reasoning, toolCall: m.toolCall !== false });
+  }
   for (const m of c.customModels) list.push({ ...m, builtin: false, tier: m.tier || 'custom' });
   return list;
 }
@@ -120,17 +127,19 @@ function resolve(key) {
   const c = load();
   const m = modelInfo(key);
   if (!m) return null;
-  let baseUrl, apiKey;
-  if (m.provider === 'custom') { baseUrl = m.baseUrl; apiKey = m.apiKey || ''; }
+  let baseUrl = '', apiKey = '';
+  if (m.provider === 'vault') { baseUrl = 'vault'; apiKey = vaultEnabled() ? 'vault' : ''; } // expanded per request by vault.js
+  else if (m.provider === 'custom') { baseUrl = m.baseUrl || ''; apiKey = m.apiKey || ''; }
   else {
-    const p = PROVIDERS[m.provider] || PROVIDERS.gateway;
-    baseUrl = m.baseUrl || p.baseUrl;
-    apiKey = m.apiKey || c.keys[p.keyName] || '';
-    if (m.provider === 'gateway') apiKey = apiKey || (baseUrl ? 'gateway' : ''); // the gateway authenticates with signed headers, not a bearer key
+    const pv = (c.providers || {})[m.provider];
+    if (pv) { baseUrl = pv.baseUrl || m.baseUrl || ''; apiKey = pv.apiKey || ''; }
+    else { baseUrl = m.baseUrl || ''; apiKey = m.apiKey || ''; } // legacy customModels rows
   }
   if (!baseUrl) return null;
-  return { key: m.key, label: m.label, vendor: m.vendor || '', baseUrl: baseUrl.replace(/\/+$/, ''), apiKey, model: m.model, maxTokens: m.maxTokens || 4096 };
+  return { key: m.key, label: m.label, vendor: m.vendor || '', provider: m.provider, baseUrl: baseUrl.replace(/\/+$/, ''), apiKey, model: m.model, maxTokens: m.maxTokens || 4096, reasoning: m.reasoning, toolCall: m.toolCall };
 }
+let vaultEnabled = () => false; // injected by vault.js (avoids a require cycle)
+function setVaultProbe(fn) { vaultEnabled = fn; }
 
 function fallbackOrder(primary) {
   const keys = allModels().map((m) => m.key);
@@ -140,11 +149,11 @@ function fallbackOrder(primary) {
 
 function publicView() {
   const c = load();
-  const mask = (k) => (k ? k.slice(0, 6) + '…' + k.slice(-4) : '');
+  const mask = (k) => (k ? k.slice(0, 4) + '…' + k.slice(-4) : '');
+  const { providers: pvs, ...rest } = c;
   return {
-    ...c,
-    keys: Object.fromEntries(Object.entries(c.keys).map(([k, v]) => [k, mask(v)])),
-    keysSet: Object.fromEntries(Object.entries(c.keys).map(([k, v]) => [k, !!v])),
+    ...rest,
+    providers: Object.fromEntries(Object.entries(pvs || {}).map(([id, p]) => [id, { ...p, apiKey: mask(p.apiKey), keySet: !!p.apiKey, models: p.models || [] }])),
     customModels: c.customModels.map((m) => ({ ...m, apiKey: m.apiKey ? mask(m.apiKey) : '' })),
     vision: { ...c.vision, apiKey: mask(c.vision.apiKey), keySet: !!c.vision.apiKey },
     imageGen: { ...c.imageGen, apiKey: mask(c.imageGen.apiKey), keySet: !!c.imageGen.apiKey },
@@ -152,11 +161,10 @@ function publicView() {
     version: (() => { try { return require('../../package.json').version; } catch (_) { return ''; } })(),
     dataDir: getDataDir(),
     workspaceDir: workspaceDir(),
-    models: [AUTO, ...allModels().map((m) => ({ key: m.key, label: m.label, vendor: m.vendor, tier: m.tier, note: m.note, builtin: m.builtin, provider: m.provider }))],
-    providers: Object.fromEntries(Object.entries(PROVIDERS).filter(([, p]) => !p.hidden)),
-    gateway: !!GATEWAY,
-    app: { name: APP.name || 'ORCA Agent', company: APP.company || '', repo: APP.repo || '', homepage: APP.homepage || '' },
+    models: [AUTO, ...allModels().map((m) => ({ key: m.key, label: m.label, vendor: m.vendor, tier: m.tier, note: m.note, builtin: m.builtin, provider: m.provider, ready: !!resolve(m.key)?.apiKey }))],
+    builtin: vaultEnabled(),
+    app: { name: APP.name || 'ORCA', company: APP.company || '', repo: APP.repo || '', homepage: APP.homepage || '' },
   };
 }
 
-module.exports = { AUTO, setDataDir, getDataDir, load, save, workspaceDir, allModels, modelInfo, resolve, fallbackOrder, publicView, PROVIDERS, BUILTIN_MODELS, builtinModels, setRemoteModels, GATEWAY, APP };
+module.exports = { AUTO, setDataDir, getDataDir, load, save, workspaceDir, allModels, modelInfo, resolve, fallbackOrder, publicView, PROVIDERS, BUILTIN_MODELS, builtinModels, setRemoteModels, setVaultProbe, APP };

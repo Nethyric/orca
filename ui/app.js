@@ -139,15 +139,17 @@ $('#search').oninput = () => { clearTimeout(searchTimer); const q = $('#search')
 
 // ───────────────────────── mode ─────────────────────────
 function setMode(m) { S.mode = m; $$('#mode-seg button').forEach((b) => b.classList.toggle('active', b.dataset.mode === m)); $('#pick-single').classList.toggle('hidden', m !== 'direct'); $('#pick-a').classList.toggle('hidden', m !== 'side'); $('#pick-b').classList.toggle('hidden', m !== 'side'); $('#messages').classList.toggle('wide', m !== 'direct'); }
-$$('#mode-seg button').forEach((b) => (b.onclick = () => { if (S.running.size) return toast(t('running'), 'err'); if (S.chat && S.chat.messages.length && S.chat.mode !== b.dataset.mode) newChat(); setMode(b.dataset.mode); }));
-function newChat() { if (S.running.size) return toast(t('running'), 'err'); S.chat = null; S.regenFrom = null; $('#messages').innerHTML = ''; $('#welcome').classList.remove('hidden'); $('#tb-title').textContent = ''; $('#tab-timeline').innerHTML = `<div class="empty">${t('emptyTimeline')}</div>`; $('#changes-list').innerHTML = ''; $('#chg-badge').classList.add('hidden'); renderChatList(S.chats); $('#input').focus(); }
+$$('#mode-seg button').forEach((b) => (b.onclick = () => { if (runningHere()) return toast(t('running'), 'err'); if (S.chat && S.chat.messages.length && S.chat.mode !== b.dataset.mode) newChat(); setMode(b.dataset.mode); }));
+// runs that belong to the chat currently on screen (others keep streaming in the background and are re-rendered when you return)
+const runningHere = () => [...S.lanes.values()].some((L) => L.group && L.group.chatId === S.chat?.id && S.running.has(L.runId));
+function newChat() { S.chat = null; S.regenFrom = null; setBusy(false); $('#messages').innerHTML = ''; $('#welcome').classList.remove('hidden'); $('#tb-title').textContent = ''; $('#tab-timeline').innerHTML = `<div class="empty">${t('emptyTimeline')}</div>`; $('#changes-list').innerHTML = ''; $('#chg-badge').classList.add('hidden'); renderChatList(S.chats); $('#input').focus(); }
 $('#new-chat').onclick = newChat;
 
 async function openChat(id, focusMsg) {
-  if (S.running.size && S.chat?.id !== id) return toast(t('running'), 'err');
   const c = await api('/api/chats/' + id); if (c.error) return;
   S.chat = c; setMode(c.mode || 'direct');
   $('#welcome').classList.add('hidden'); $('#tb-title').textContent = c.title || '';
+  setBusy(runningHere());
   const box = $('#messages'); box.innerHTML = '';
   const rendered = new Set();
   for (const m of c.messages) {
@@ -155,7 +157,10 @@ async function openChat(id, focusMsg) {
     else if (m.role === 'assistant' && !rendered.has(m.id)) {
       const group = m.runId ? c.messages.filter((x) => x.role === 'assistant' && x.runId === m.runId) : [m];
       group.forEach((x) => rendered.add(x.id));
-      box.appendChild(renderGroup(group, c));
+      // still streaming? re-attach the live lane elements instead of a static snapshot
+      const live = [...S.lanes.values()].filter((L) => group.some((x) => x.id === L.m.id) && S.running.has(L.runId));
+      if (live.length) { const wrap = live[0].wrap; if (!wrap.isConnected) box.appendChild(wrap); else box.appendChild(wrap); }
+      else box.appendChild(renderGroup(group, c));
     }
   }
   renderChatList(S.chats); refreshTimeline(); refreshChanges();
@@ -316,7 +321,7 @@ $('#input').onkeydown = (e) => {
   const wantCtrl = P.sendKey === 'ctrlEnter';
   if ((wantCtrl && (e.ctrlKey || e.metaKey)) || (!wantCtrl && !e.shiftKey && !e.ctrlKey && !e.metaKey)) { e.preventDefault(); send(); }
 };
-$('#send').onclick = () => (S.running.size ? stopAll() : send());
+$('#send').onclick = () => (runningHere() ? stopAll() : send());
 $('#stop-btn').onclick = stopAll;
 $('#suggestions').onclick = (e) => { const s = e.target.closest('.sug'); if (s) { $('#input').value = s.dataset.p; autosize(); send(); } };
 $('#plan-toggle').onclick = () => { S.planMode = !S.planMode; $('#plan-toggle').classList.toggle('active', S.planMode); };
@@ -358,7 +363,7 @@ document.addEventListener('drop', async (e) => { e.preventDefault(); dragDepth =
 async function send(textOverride, regenerateFrom) {
   let text = textOverride ?? $('#input').value.trim();
   if (!text && !S.attach.length) return;
-  if (S.running.size) return toast(t('running'), 'err');
+  if (runningHere()) return toast(t('running'), 'err');
   if (S.attach.some((a) => a.uploading)) return toast(t('uploading'));
   // local slash commands
   const sc = text.match(/^\/(plan|model|export|clear|files|new)\b\s*(.*)$/i);
@@ -388,14 +393,14 @@ async function send(textOverride, regenerateFrom) {
   r.lanes.forEach((ln, i) => {
     const m = { id: ln.msgId, lane: r.lanes.length === 2 ? (i === 0 ? 'a' : 'b') : '', model: anon ? '' : (modelOf(r.models[i])?.label || r.models[i]), modelKey: anon ? '' : r.models[i], runId: ln.runId.split(':')[0], events: [], status: 'running' };
     const l = laneEl(m, anon, i); l.classList.add('streaming'); $('.content', l).classList.add('streaming'); lanes.appendChild(l);
-    S.lanes.set(ln.runId, { el: l, m, content: '', reasoning: '', steps: {}, wrap, group: r, anon, t0: Date.now() });
+    S.lanes.set(ln.runId, { el: l, m, content: '', reasoning: '', steps: {}, wrap, group: { ...r, chatId: S.chat.id }, anon, t0: Date.now(), runId: ln.runId });
     S.running.set(ln.runId, true);
   });
   $('#thread').scrollTop = 1e9;
   loadChats();
 }
 function setBusy(b) { $('#status-line').classList.toggle('hidden', !b); $('#tb-status').className = 'dot ' + (b ? 'busy' : 'on'); const sb = $('#send'); sb.classList.toggle('stop', b); sb.innerHTML = ico(b ? 'stop' : 'send'); sb.dataset.tip = b ? t('stop') : 'Send'; }
-async function stopAll() { if (!S.running.size) return; await api('/api/stop', { method: 'POST', body: { runIds: [...S.running.keys()] } }); }
+async function stopAll() { const ids = [...S.lanes.values()].filter((L) => L.group?.chatId === S.chat?.id).map((L) => L.runId).filter((id) => S.running.has(id)); if (!ids.length) return; await api('/api/stop', { method: 'POST', body: { runIds: ids } }); }
 
 // ───────────────────────── SSE ─────────────────────────
 function connect() {
@@ -458,7 +463,10 @@ function handle(p) {
     case 'done': {
       $('.content', L.el).classList.remove('streaming'); L.el.classList.remove('streaming');
       S.running.delete(p.runId);
-      if (!S.running.size) { setBusy(false); finishGroup(L); }
+      const here = L.group?.chatId === S.chat?.id;
+      if (!runningHere()) setBusy(false);
+      if (here) { if (![...L.group.lanes].some((ln) => S.running.has(ln.runId))) finishGroup(L); }
+      else { for (const ln of L.group.lanes) S.lanes.delete(ln.runId); loadChats(); if (P.notifications && window.Notification && Notification.permission === 'granted') new Notification('ORCA', { body: t('doneInOtherChat') }); else toast(t('doneInOtherChat'), 'ok'); }
       break;
     }
   }
@@ -587,6 +595,55 @@ $('#open-memory').onclick = async () => { const { text } = await api('/api/memor
 $('#open-settings').onclick = () => openSettings();
 
 const SHORTCUTS = [['Ctrl N', 'newChat'], ['Ctrl K', 'actions'], ['Ctrl B', 'railT'], ['Ctrl .', 'panelT'], ['Ctrl ,', 'settings'], ['Esc', 'stop'], ['Ctrl Shift L', 'theme'], ['Ctrl Shift F', 'searchPh'], ['Ctrl /', 'shortcuts']];
+// ---- Providers (bring your own key) ----
+// Flow: pick a provider from the catalog (models.dev mirror, 200+) or "Custom" → paste key → models auto-discovered from the
+// provider's /models endpoint (fallback: catalog) → tick the ones you want → Test → Save. Keys never leave this machine.
+let CATALOG = null;
+async function providerEditor(existingId) {
+  const c = S.cfg; const box = $('#prov-editor'); box.classList.remove('hidden'); box.innerHTML = `<div class="empty">…</div>`;
+  if (!CATALOG) { try { CATALOG = await api('/api/providers/catalog'); } catch (_) { CATALOG = { providers: [] }; } }
+  const cur = existingId ? { id: existingId, ...(c.providers[existingId] || {}) } : { id: '', name: '', baseUrl: '', apiKey: '', models: [] };
+  const featured = CATALOG.providers.filter((p) => (CATALOG.featured || []).includes(p.id));
+  const others = CATALOG.providers.filter((p) => !(CATALOG.featured || []).includes(p.id));
+  const opt = (p) => `<option value="${esc(p.id)}" ${p.id === cur.id ? 'selected' : ''}>${esc(p.name)}${p.count ? ` (${p.count})` : ''}</option>`;
+  box.innerHTML = `
+    <div class="pe-head"><b>${existingId ? ts('editProvider') : ts('addProvider')}</b><button class="ib sm" id="pe-close">${ico('x')}</button></div>
+    <div class="form-row"><label>${ts('provider')}</label><select class="text" id="pe-id" ${existingId ? 'disabled' : ''}><optgroup label="${ts('popular')}">${featured.map(opt).join('')}</optgroup><optgroup label="${ts('allProviders')}">${others.map(opt).join('')}</optgroup></select></div>
+    <div class="form-row"><label>${ts('displayName')}</label><input class="text" id="pe-name" value="${esc(cur.name || '')}" placeholder="—"></div>
+    <div class="form-row"><label>Base URL</label><input class="text mono" id="pe-url" value="${esc(cur.baseUrl || '')}" placeholder="https://api.example.com/v1" spellcheck="false"></div>
+    <div class="form-row"><label>${ts('apiKey')}</label><input class="text mono" id="pe-key" type="password" placeholder="${cur.keySet ? cur.apiKey : ts('pasteKey')}" spellcheck="false" autocomplete="off"><button class="ib sm" id="pe-eye" data-tip="${ts('show')}">${ico('eye')}</button><a class="small" id="pe-doc" target="_blank" rel="noopener" href="#">${ts('getKey')}</a></div>
+    <div class="form-row"><label>${ts('models')}</label><div class="pe-models-tools"><input class="text" id="pe-filter" placeholder="${ts('filterModels')}"><button class="btn sm" id="pe-discover">${ico('refresh')}${ts('discover')}</button><span class="small" id="pe-count"></span></div></div>
+    <div class="pe-models" id="pe-models"></div>
+    <div class="pe-foot"><span class="small" id="pe-msg"></span><span class="sp"></span><button class="btn sm" id="pe-test">${ts('test')}</button><button class="btn primary sm" id="pe-save">${ico('check')}${ts('save')}</button></div>`;
+  let known = []; // catalog rows for the selected provider
+  let chosen = new Map((cur.models || []).map((m) => [m.id, m]));
+  const provInfo = () => CATALOG.providers.find((p) => p.id === $('#pe-id').value) || {};
+  const renderModels = () => {
+    const f = ($('#pe-filter').value || '').toLowerCase();
+    const rows = [...known]; for (const m of chosen.values()) if (!rows.find((r) => r.id === m.id)) rows.unshift({ ...m, custom: true });
+    const vis = rows.filter((m) => !f || m.id.toLowerCase().includes(f) || (m.name || '').toLowerCase().includes(f)).slice(0, 400);
+    $('#pe-count').textContent = `${chosen.size} ${ts('selected')} · ${rows.length}`;
+    $('#pe-models').innerHTML = vis.map((m) => `<label class="pe-m ${chosen.has(m.id) ? 'on' : ''}"><input type="checkbox" data-id="${esc(m.id)}" ${chosen.has(m.id) ? 'checked' : ''}><span class="pe-m-name">${esc(m.name || m.id)}</span><span class="k mono">${esc(m.id)}</span><span class="pe-m-tags">${m.toolCall ? `<i>${ts('tools')}</i>` : ''}${m.reasoning ? `<i>${ts('reasoning')}</i>` : ''}${m.attachment ? `<i>${ts('images')}</i>` : ''}${m.context ? `<i>${Math.round(m.context / 1000)}k</i>` : ''}${m.free ? `<i class="free">${ts('free')}</i>` : ''}</span></label>`).join('') + (rows.length ? '' : `<div class="empty small">${ts('noModelsYet')}</div>`) + `<div class="pe-m add"><input class="text mono" id="pe-manual" placeholder="${ts('manualModelId')}"><button class="btn sm" id="pe-manual-add">${ts('add')}</button></div>`;
+    $$('#pe-models input[type=checkbox]').forEach((cb) => (cb.onchange = () => { const m = rows.find((r) => r.id === cb.dataset.id); if (cb.checked) chosen.set(m.id, { id: m.id, name: m.name, maxTokens: m.output || m.maxTokens || 8192, reasoning: !!m.reasoning, toolCall: m.toolCall !== false, attachment: !!m.attachment, context: m.context || 0 }); else chosen.delete(m.id); cb.closest('.pe-m').classList.toggle('on', cb.checked); $('#pe-count').textContent = `${chosen.size} ${ts('selected')} · ${rows.length}`; }));
+    $('#pe-manual-add').onclick = () => { const id = $('#pe-manual').value.trim(); if (!id) return; chosen.set(id, { id, name: id, maxTokens: 8192, toolCall: true }); renderModels(); };
+  };
+  const loadCatalogModels = async () => { const p = provInfo(); if (!p.id) return; const r = await api('/api/providers/models?id=' + encodeURIComponent(p.id)); known = r.models || []; renderModels(); };
+  const applyProvider = async () => { const p = provInfo(); if (!existingId) { $('#pe-name').value = p.name || ''; $('#pe-url').value = p.api || ''; } $('#pe-url').placeholder = p.api || 'https://api.example.com/v1'; $('#pe-doc').href = ({ openai: 'https://platform.openai.com/api-keys', anthropic: 'https://console.anthropic.com/settings/keys', google: 'https://aistudio.google.com/apikey', openrouter: 'https://openrouter.ai/keys', groq: 'https://console.groq.com/keys', xai: 'https://console.x.ai', mistral: 'https://console.mistral.ai/api-keys', deepseek: 'https://platform.deepseek.com/api_keys', togetherai: 'https://api.together.ai/settings/api-keys', cerebras: 'https://cloud.cerebras.ai', zhipuai: 'https://open.bigmodel.cn/usercenter/apikeys', moonshotai: 'https://platform.moonshot.ai/console/api-keys', huggingface: 'https://huggingface.co/settings/tokens', nvidia: 'https://build.nvidia.com', 'fireworks-ai': 'https://fireworks.ai/account/api-keys', dahl: 'https://inference.dahl.global/account' })[p.id] || (p.doc || '#'); $('#pe-doc').classList.toggle('hidden', $('#pe-doc').getAttribute('href') === '#'); $('#pe-key').placeholder = p.local ? ts('noKeyNeeded') : (cur.keySet ? cur.apiKey : ts('pasteKey')); await loadCatalogModels(); };
+  $('#pe-id').onchange = applyProvider;
+  $('#pe-filter').oninput = renderModels;
+  $('#pe-eye').onclick = () => { const k = $('#pe-key'); k.type = k.type === 'password' ? 'text' : 'password'; };
+  $('#pe-close').onclick = () => box.classList.add('hidden');
+  const creds = () => ({ baseUrl: $('#pe-url').value.trim(), apiKey: $('#pe-key').value.trim(), api: provInfo().anthropic || /anthropic\.com/.test($('#pe-url').value) ? 'anthropic' : 'openai' });
+  $('#pe-discover').onclick = async () => { const b = $('#pe-discover'); b.disabled = true; $('#pe-msg').textContent = ts('discovering'); const body = creds(); if (!body.apiKey && cur.keySet) body.useStored = existingId; const r = await api('/api/providers/discover', { method: 'POST', body: { ...body, id: existingId || '' } }); b.disabled = false; if (r.error) { $('#pe-msg').textContent = '✗ ' + r.error.slice(0, 120); return; } const live = r.models || []; const byId = new Map(known.map((m) => [m.id, m])); known = live.map((m) => ({ ...(byId.get(m.id) || {}), ...m, toolCall: byId.get(m.id)?.toolCall ?? true })); $('#pe-msg').textContent = `✓ ${live.length} ${ts('modelsN')}`; renderModels(); };
+  $('#pe-test').onclick = async () => { const m = [...chosen.keys()][0]; if (!m) return ($('#pe-msg').textContent = ts('pickModelFirst')); $('#pe-msg').textContent = ts('testing'); const body = { ...creds(), model: m }; if (!body.apiKey && existingId) body.key = `${existingId}/${m}`; const r = await api('/api/models/test', { method: 'POST', body }); $('#pe-msg').textContent = r.ok ? `✓ ${m} · ${r.ms} ms` : `✗ ${(r.error || '').slice(0, 140)}`; };
+  $('#pe-save').onclick = async () => { const id = existingId || $('#pe-id').value; if (!id) return; const pv = { name: $('#pe-name').value.trim() || provInfo().name || id, baseUrl: $('#pe-url').value.trim() || provInfo().api || '', models: [...chosen.values()] }; const k = $('#pe-key').value.trim(); if (k) pv.apiKey = k; if (!pv.baseUrl) return ($('#pe-msg').textContent = ts('needUrl')); if (!pv.models.length) return ($('#pe-msg').textContent = ts('pickModelFirst')); await api('/api/config', { method: 'POST', body: { providers: { [id]: pv } } }); await loadConfig(); toast(ts('saved'), 'ok'); openSettings('models'); };
+  await applyProvider();
+  if (existingId) { $('#pe-name').value = cur.name || ''; $('#pe-url').value = cur.baseUrl || ''; renderModels(); }
+}
+async function paintVault() {
+  const d = $('#cloud-dot'), st = $('#cloud-state'); if (!d || !st) return;
+  try { const v = await api('/api/vault'); d.className = 'cloud-dot ' + (v.ok ? 'on' : 'off'); st.textContent = !v.enabled ? tu('cloudOff') : v.ok ? `${tu('cloudOk')} · ${v.aliases.length} ${ts('modelsN')} · ${v.keys} ${ts('keysN')}` : `${tu('cloudDown')}${v.error ? ' (' + v.error + ')' : ''}`; } catch (_) { d.className = 'cloud-dot off'; st.textContent = tu('cloudDown'); }
+}
 async function openSettings(page = 'general') {
   const c = await api('/api/config');
   const fa = lang === 'fa';
@@ -615,17 +672,14 @@ async function openSettings(page = 'general') {
   </div>
 
   <div class="spage ${page === 'models' ? 'active' : ''}" data-p="models">
-    ${c.gateway ? `<div class="desc" style="margin-bottom:12px"><span class="cloud-dot" id="cloud-dot"></span><b>${tu('cloud')}</b> · <span id="cloud-state">…</span><br>${tu('gateway')}</div>` : ''}
-    <h3>${ts('keys')}</h3><p class="sub" style="margin-top:-6px">${ts('keysDesc')}</p>
-    ${Object.entries(c.providers).map(([k, p]) => row(`${p.label} <span class="pill ${c.keysSet[k] ? 'ok' : ''}">${c.keysSet[k] ? '●' : '○'}</span>`, `<input class="text" data-key="${k}" placeholder="${c.keys[k] || (T4({ en: 'not set', fa: 'وارد نشده', ru: 'не задан', zh: '未设置' }))}" autocomplete="off" spellcheck="false"><span class="small mono">${p.baseUrl}</span>`)).join('')}
+    <div class="desc vault-box" id="vault-box"><span class="cloud-dot" id="cloud-dot"></span><b>${tu('cloud')}</b> · <span id="cloud-state">…</span><br><span class="small">${tu('gateway')}</span></div>
     <h3>${ts('modelsList')}</h3>
-    ${row(ts('defaultModel'), `<select class="text" id="st-default">${c.models.map((m) => `<option value="${m.key}" ${m.key === c.defaultModel ? 'selected' : ''}>${esc(m.label)} — ${esc(m.note?.[lang] || m.provider)}</option>`).join('')}</select>`)}
-    <div id="model-list">${c.models.filter((m) => m.key !== 'auto').map((m) => `<div class="model-row" data-key="${m.key}"><div><b>${esc(m.label)}</b> <span class="k">${esc(m.provider)} · ${esc(t('tier')[m.tier] || m.tier)}</span></div><span class="pill test-res"></span><button class="btn sm test">${ts('test')}</button>${m.builtin ? '<span></span>' : `<button class="btn sm danger del">${ico('trash')}</button>`}</div>`).join('')}</div>
-    <h3>${ts('addModel')}</h3>
-    ${row(ts('provider'), `<select class="text" id="nm-prov"><option value="openrouter">OpenRouter</option><option value="dahl">Dahl</option><option value="tokenrouter">TokenRouter</option><option value="custom">Custom (OpenAI-compatible)</option></select>`)}
-    <div class="form-row hidden" id="nm-custom"><label>Base URL</label><input class="text" id="nm-url" placeholder="https://api.example.com/v1"><input class="text" id="nm-key" placeholder="API key" style="max-width:200px"></div>
-    ${row(ts('modelId'), `<input class="text" id="nm-model" placeholder="anthropic/claude-sonnet-4" list="or-list" spellcheck="false"><datalist id="or-list"></datalist><button class="btn sm" id="or-load">${ts('loadOR')}</button>`)}
-    ${row(ts('label'), `<input class="text" id="nm-label" placeholder="Claude Sonnet 4"><button class="btn primary sm" id="nm-add">${ico('plus')}${ts('add')}</button>`)}
+    ${row(ts('defaultModel'), `<select class="text" id="st-default">${c.models.map((m) => `<option value="${m.key}" ${m.key === c.defaultModel ? 'selected' : ''}>${esc(m.label)} — ${esc(m.note?.[lang] || m.vendor || m.provider)}</option>`).join('')}</select>`)}
+    <div id="model-list">${c.models.filter((m) => m.key !== 'auto').map((m) => `<div class="model-row" data-key="${m.key}"><div><b>${esc(m.label)}</b> <span class="k">${esc(m.builtin ? ts('builtin') : m.vendor || m.provider)} · ${esc(t('tier_' + m.tier) || m.tier)}</span></div><span class="pill test-res ${m.ready ? '' : 'off'}">${m.ready ? '' : ts('noKey')}</span><button class="btn sm test">${ts('test')}</button>${m.builtin ? '' : `<button class="ib sm del" data-tip="${ts('remove')}">${ico('trash')}</button>`}</div>`).join('')}</div>
+    <h3>${ts('providers')}</h3><p class="sub" style="margin-top:-6px">${ts('providersDesc')}</p>
+    <div id="prov-list">${Object.entries(c.providers).map(([id, p]) => `<div class="prov-row" data-id="${esc(id)}"><div class="prov-main"><b>${esc(p.name || id)}</b><span class="k mono">${esc((p.baseUrl || '').replace(/^https?:\/\//, ''))}</span><span class="small">${(p.models || []).length} ${ts('modelsN')} · ${p.keySet ? ts('keySet') : ts('noKey')}</span></div><button class="btn sm edit">${ts('edit')}</button><button class="ib sm del" data-tip="${ts('remove')}">${ico('trash')}</button></div>`).join('') || `<div class="empty small">${ts('noProviders')}</div>`}</div>
+    <button class="btn primary" id="prov-add" style="margin-top:8px">${ico('plus')}${ts('addProvider')}</button>
+    <div id="prov-editor" class="prov-editor hidden"></div>
   </div>
 
   <div class="spage ${page === 'agent' ? 'active' : ''}" data-p="agent">
@@ -635,14 +689,17 @@ async function openSettings(page = 'general') {
     ${row(ts('temperature'), `<input type="range" id="temp" min="0" max="1.2" step="0.1" value="${c.temperature}" style="flex:1"><span class="small mono" id="temp-v">${c.temperature}</span>`)}
     ${row(ts('shellTimeout'), `<input class="text" id="shell-to" type="number" min="10" max="900" value="${c.shellTimeout || 120}" style="max-width:110px">`)}
     <h3>${ts('vision')}</h3><p class="sub" style="margin-top:-6px">${ts('visionDesc')}</p>
-    ${row(ts('provider'), `<select class="text" id="vs-prov" style="max-width:190px"><option value="openrouter" ${c.vision.provider === 'openrouter' ? 'selected' : ''}>OpenRouter</option><option value="custom" ${c.vision.provider === 'custom' ? 'selected' : ''}>Custom (OpenAI-compatible)</option></select><input class="text" id="vs-model" placeholder="google/gemma-4-26b-a4b-it:free" value="${esc(c.vision.model || '')}" spellcheck="false">`)}
-    ${row(ts('apiKey'), `<input class="text" id="vs-key" placeholder="${c.vision.keySet ? c.vision.apiKey : (c.keysSet.openrouter ? (T4({ en: 'uses OpenRouter key', fa: 'از کلید OpenRouter استفاده می‌شود', ru: 'используется ключ OpenRouter', zh: '使用 OpenRouter 密钥' })) : (T4({ en: 'not set', fa: 'وارد نشده', ru: 'не задан', zh: '未设置' })))}" autocomplete="off" spellcheck="false"><input class="text" id="vs-url" placeholder="${ts('baseUrl')} (custom)" value="${esc(c.vision.baseUrl || '')}" spellcheck="false">`)}
+    ${(() => { const provs = Object.entries(c.providers || {}).filter(([, p]) => p.keySet || p.apiKey); const opt = (v, label, cur) => `<option value="${esc(v)}" ${cur === v ? 'selected' : ''}>${esc(label)}</option>`; const provOpts = (cur) => provs.map(([id, p]) => opt(id, p.name || id, cur)).join('');
+      const vcur = c.vision.provider || ''; const icur = c.imageGen.provider || ''; const vgcur = c.videoGen.provider || '';
+      return `
+    ${row(ts('provider'), `<select class="text" id="vs-prov" style="max-width:220px">${opt('', ts('visAuto'), vcur)}${provOpts(vcur)}${opt('custom', ts('customEndpoint'), vcur)}</select><input class="text" id="vs-model" placeholder="${ts('modelId')}" value="${esc(c.vision.model || '')}" spellcheck="false">`)}
+    ${row(ts('apiKey'), `<input class="text" id="vs-key" placeholder="${c.vision.keySet ? c.vision.apiKey : ts('keyOptionalProv')}" autocomplete="off" spellcheck="false"><input class="text" id="vs-url" placeholder="${ts('baseUrl')}" value="${esc(c.vision.baseUrl || '')}" spellcheck="false">`)}
     <h3>${ts('imageGen')}</h3><p class="sub" style="margin-top:-6px">${ts('imageGenDesc')}</p>
-    ${row(ts('provider'), `<select class="text" id="ig-prov" style="max-width:190px"><option value="" ${!c.imageGen.provider ? 'selected' : ''}>${ts('free')}</option><option value="openai" ${c.imageGen.provider === 'openai' ? 'selected' : ''}>OpenAI-compatible (/images/generations)</option><option value="openrouter" ${c.imageGen.provider === 'openrouter' ? 'selected' : ''}>OpenRouter (Gemini image)</option></select><input class="text" id="ig-model" placeholder="gpt-image-1 | google/gemini-2.5-flash-image" value="${esc(c.imageGen.model || '')}" spellcheck="false">`)}
-    ${row(ts('apiKey'), `<input class="text" id="ig-key" placeholder="${c.imageGen.keySet ? c.imageGen.apiKey : (T4({ en: 'optional', fa: 'اختیاری', ru: 'необязательно', zh: '可选' }))}" autocomplete="off" spellcheck="false"><input class="text" id="ig-url" placeholder="${ts('baseUrl')} (https://api.openai.com/v1)" value="${esc(c.imageGen.baseUrl || '')}" spellcheck="false">`)}
+    ${row(ts('provider'), `<select class="text" id="ig-prov" style="max-width:220px">${opt('', ts('builtinFree'), icur)}${opt('openai', ts('imagesApi'), icur)}${provOpts(icur)}</select><input class="text" id="ig-model" placeholder="${ts('modelId')}" value="${esc(c.imageGen.model || '')}" spellcheck="false">`)}
+    ${row(ts('apiKey'), `<input class="text" id="ig-key" placeholder="${c.imageGen.keySet ? c.imageGen.apiKey : ts('keyOptionalProv')}" autocomplete="off" spellcheck="false"><input class="text" id="ig-url" placeholder="${ts('baseUrl')}" value="${esc(c.imageGen.baseUrl || '')}" spellcheck="false">`)}
     <h3>${ts('videoGen')}</h3><p class="sub" style="margin-top:-6px">${ts('videoGenDesc')}</p>
-    ${row(ts('provider'), `<select class="text" id="vg-prov" style="max-width:190px"><option value="" ${!c.videoGen.provider ? 'selected' : ''}>${ts('free')}</option><option value="replicate" ${c.videoGen.provider === 'replicate' ? 'selected' : ''}>Replicate</option><option value="fal" ${c.videoGen.provider === 'fal' ? 'selected' : ''}>fal.ai</option></select><input class="text" id="vg-model" placeholder="wan-video/wan-2.2-t2v-fast | fal-ai/minimax/hailuo-02/standard/text-to-video" value="${esc(c.videoGen.model || '')}" spellcheck="false">`)}
-    ${row(ts('apiKey'), `<input class="text" id="vg-key" placeholder="${c.videoGen.keySet ? c.videoGen.apiKey : (T4({ en: 'optional', fa: 'اختیاری', ru: 'необязательно', zh: '可选' }))}" autocomplete="off" spellcheck="false">`)}
+    ${row(ts('provider'), `<select class="text" id="vg-prov" style="max-width:220px">${opt('', ts('builtinFree'), vgcur)}${opt('replicate', ts('vgPred'), vgcur)}${opt('fal', ts('vgQueue'), vgcur)}</select><input class="text" id="vg-model" placeholder="${ts('modelId')}" value="${esc(c.videoGen.model || '')}" spellcheck="false">`)}
+    ${row(ts('apiKey'), `<input class="text" id="vg-key" placeholder="${c.videoGen.keySet ? c.videoGen.apiKey : ts('keyOptional')}" autocomplete="off" spellcheck="false">`)}`; })()}
     <h3>${ts('social')}</h3><p class="sub" style="margin-top:-6px">${ts('socialDesc')}</p>
     ${row('cookies', `<select class="text" id="ck-browser" style="max-width:160px"><option value="">—</option>${['chrome', 'edge', 'firefox', 'brave', 'opera', 'vivaldi', 'chromium'].map((b) => `<option value="${b}" ${c.cookiesBrowser === b ? 'selected' : ''}>${b}</option>`).join('')}</select><input class="text" id="ck-file" placeholder="C:\\Users\\you\\cookies.txt" value="${esc(c.cookiesFile || '')}" spellcheck="false">`)}
     <h3>${ts('persona')}</h3><p class="sub" style="margin-top:-6px">${ts('personaDesc')}</p>
@@ -687,12 +744,12 @@ async function openSettings(page = 'general') {
     if (dl) dl.classList.toggle('hidden', !(u.available && u.asset && !u.download?.ready));
     if (ap) ap.classList.toggle('hidden', !(u.download && u.download.ready));
     if (notes) { notes.classList.toggle('hidden', !(u.available && u.notes)); if (u.available && u.notes) notes.innerHTML = md(u.notes); }
-    for (const [d, st] of [['#cloud-dot', '#cloud-state'], ['#cloud-dot2', '#cloud-state2']]) { const de = $(d), se = $(st); if (!de || !se) continue; const g = u.gateway || {}; de.className = 'cloud-dot ' + (g.ok ? 'on' : g.configured ? 'off' : ''); se.textContent = g.ok ? tu('cloudOk') : g.configured ? `${tu('cloudDown')} (${g.error || ''})` : tu('cloudOff'); }
+    { const de = $('#cloud-dot2'), se = $('#cloud-state2'); if (de && se) { const g = u.vault || {}; de.className = 'cloud-dot ' + (g.ok ? 'on' : g.enabled ? 'off' : ''); se.textContent = !g.enabled ? tu('cloudOff') : g.ok ? `${tu('cloudOk')} · ${(g.aliases || []).length} ${ts('modelsN')}` : `${tu('cloudDown')}${g.error ? ' (' + g.error + ')' : ''}`; } }
   };
   api('/api/update').then(paintUpd).catch(() => {});
   if ($('#upd-check')) $('#upd-check').onclick = async () => { $('#upd-msg').textContent = tu('checking'); paintUpd(await api('/api/update?force=1')); };
   if ($('#upd-dl')) $('#upd-dl').onclick = async () => { $('#upd-msg').textContent = tu('downloading'); await api('/api/update/download', { method: 'POST' }); };
-  if ($('#upd-apply')) $('#upd-apply').onclick = async () => { const r = await api('/api/update/apply', { method: 'POST' }); if (r.manual) window.open(r.zip ? '' : S.upd?.url, '_blank'); };
+  if ($('#upd-apply')) $('#upd-apply').onclick = async () => { const r = await api('/api/update/apply', { method: 'POST' }); if (r.error) toast(r.error, 'err'); else if (r.manual) window.open(S.upd?.url || 'https://github.com/' + (S.cfg.app?.repo || '') + '/releases/latest', '_blank'); };
   if ($('#st-autoupd')) swClick('st-autoupd', (on) => api('/api/config', { method: 'POST', body: { autoUpdate: on } }));
   // general
   segClick('st-lang', async (v) => { await setLang(v); openSettings('general'); });
@@ -705,12 +762,13 @@ async function openSettings(page = 'general') {
   $$('#st-accent .sw').forEach((s) => (s.onclick = () => { $$('#st-accent .sw').forEach((x) => x.classList.toggle('on', x === s)); P.accent = s.dataset.a; applyPrefs(); }));
   $('#st-fs').oninput = (e) => { P.fontSize = +e.target.value; $('#st-fs-v').textContent = P.fontSize + 'px'; applyPrefs(); };
   segClick('st-density', (v) => { P.density = v; applyPrefs(); });
-  // models
-  $('#nm-prov').onchange = () => $('#nm-custom').classList.toggle('hidden', $('#nm-prov').value !== 'custom');
-  $('#or-load').onclick = async () => { $('#or-load').textContent = '…'; const { models } = await api('/api/openrouter/models'); $('#or-list').innerHTML = models.filter((m) => m.tools).map((m) => `<option value="${esc(m.id)}">${esc(m.name)}</option>`).join(''); $('#or-load').textContent = `${models.length} ✓`; };
-  $$('#model-list .test').forEach((b) => (b.onclick = async () => { const rowEl = b.closest('.model-row'); const res = $('.test-res', rowEl); res.textContent = '…'; res.className = 'pill test-res'; const r = await api('/api/models/test', { method: 'POST', body: { key: rowEl.dataset.key } }); res.textContent = r.ok ? `✓ ${r.ms}ms` : `✗ ${r.status || ''} ${(r.error || '').slice(0, 40)}`; res.classList.add(r.ok ? 'ok' : 'bad'); }));
-  $$('#model-list .del').forEach((b) => (b.onclick = async () => { const key = b.closest('.model-row').dataset.key; await api('/api/config', { method: 'POST', body: { customModels: c.customModels.filter((m) => m.key !== key) } }); await loadConfig(); openSettings('models'); }));
-  $('#nm-add').onclick = async () => { const prov = $('#nm-prov').value, model = $('#nm-model').value.trim(); if (!model) return; const label = $('#nm-label').value.trim() || model.split('/').pop(); const key = 'm_' + model.replace(/[^a-z0-9]+/gi, '_').toLowerCase().slice(0, 40); const nm = { key, label, provider: prov, model, maxTokens: 8192, vendor: model.split('/')[0] }; if (prov === 'custom') { nm.baseUrl = $('#nm-url').value.trim(); nm.apiKey = $('#nm-key').value.trim(); } const keyInput = $('[data-key="openrouter"]'); const patch = { customModels: [...c.customModels.filter((m) => m.key !== key), nm] }; if (prov === 'openrouter' && keyInput.value.trim()) patch.keys = { openrouter: keyInput.value.trim() }; await api('/api/config', { method: 'POST', body: patch }); toast('＋ ' + label, 'ok'); await loadConfig(); openSettings('models'); };
+  // models & providers
+  $$('#model-list .test').forEach((b) => (b.onclick = async () => { const rowEl = b.closest('.model-row'); const res = $('.test-res', rowEl); res.textContent = '…'; res.className = 'pill test-res'; const r = await api('/api/models/test', { method: 'POST', body: { key: rowEl.dataset.key } }); res.textContent = r.ok ? `✓ ${r.ms} ms` : `✗ ${(r.error || '').slice(0, 60)}`; res.classList.add(r.ok ? 'ok' : 'err'); }));
+  $$('#model-list .del').forEach((b) => (b.onclick = async () => { const key = b.closest('.model-row').dataset.key; const [pid, ...rest] = key.split('/'); const mid = rest.join('/'); const pv = c.providers[pid]; if (pv) { await api('/api/config', { method: 'POST', body: { providers: { [pid]: { models: (pv.models || []).filter((m) => m.id !== mid) } } } }); } else await api('/api/config', { method: 'POST', body: { customModels: c.customModels.filter((m) => m.key !== key) } }); await loadConfig(); openSettings('models'); }));
+  $$('#prov-list .del').forEach((b) => (b.onclick = async () => { const id = b.closest('.prov-row').dataset.id; if (!confirm(ts('removeProviderConfirm'))) return; await api('/api/config', { method: 'POST', body: { providers: { [id]: null } } }); await loadConfig(); openSettings('models'); }));
+  $$('#prov-list .edit').forEach((b) => (b.onclick = () => providerEditor(b.closest('.prov-row').dataset.id)));
+  $('#prov-add').onclick = () => providerEditor(null);
+  paintVault();
   // agent
   let autoV = c.autonomy, effortV = c.reasoningEffort || 'medium';
   segClick('st-auto', (v) => (autoV = v)); segClick('st-effort', (v) => (effortV = v));

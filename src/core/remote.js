@@ -1,15 +1,10 @@
 'use strict';
-// Remote services for the public build:
-//   • gateway   — the app never holds provider API keys. Requests go to the ORCA gateway
-//                 (Cloudflare Worker, see gateway/) which injects the real keys server-side.
-//                 Which keys / which models are live is decided remotely, so quota can be
-//                 refilled or rotated without shipping a new release and without users seeing anything.
-//   • remote config — small JSON pulled from the gateway (with GitHub raw as fallback):
-//                 model list, notices, minimum supported version, feature flags.
-//   • updates   — checks GitHub Releases (latest release for the repo in orca.config.json);
-//                 compares semver, exposes {available, version, notes, url, asset}.
-//                 Portable build → downloads the zip to a temp folder, verifies sha256 from the
-//                 release manifest (SHA256SUMS), extracts, and swaps the folder on next start.
+// Remote services for the public build (no server of our own):
+//   • remote config — small JSON pulled from GitHub (raw → jsDelivr mirror): notices, minimum supported version, feature flags.
+//                     Model list + provider keys come from the Sealed Vault (vault.js).
+//   • updates       — checks GitHub Releases (latest release for the repo in orca.config.json); compares semver,
+//                     exposes {available, version, notes, url, asset}. Portable build → downloads the zip, verifies sha256
+//                     from the release manifest (SHA256SUMS), extracts, and swaps the folder on restart.
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -20,12 +15,12 @@ const config = require('./config');
 const APP = (() => { try { return require('../../orca.config.json'); } catch (_) { return {}; } })();
 const PKG = (() => { try { return require('../../package.json'); } catch (_) { return { version: '0.0.0' }; } })();
 const VERSION = PKG.version;
+const BUILD_INFO = (() => { try { return require('../build-info.json'); } catch (_) { return {}; } })();
 const REPO = APP.repo || 'Nethyric/orca';
-const GATEWAY = (process.env.ORCA_GATEWAY || APP.gateway || '').replace(/\/+$/, '');
 const CHANNEL = APP.updateChannel || 'stable';
 const UA = `ORCA/${VERSION} (${process.platform}; ${process.arch})`;
 
-// ---------- anonymous install id (for fair-use rate limits at the gateway; no personal data) ----------
+// ---------- anonymous install id (random; used only to de-duplicate update checks — no personal data) ----------
 function installId() {
   const f = path.join(config.getDataDir(), 'install-id');
   try { const v = fs.readFileSync(f, 'utf8').trim(); if (/^[a-f0-9]{32}$/.test(v)) return v; } catch (_) {}
@@ -34,24 +29,9 @@ function installId() {
   return v;
 }
 
-// ---------- request signing ----------
-// Each request carries: X-ORCA-Client (version), X-ORCA-Install (anonymous id), X-ORCA-TS and X-ORCA-Sig.
-// The signature is HMAC-SHA256 over `${ts}.${install}.${path}` with a build token that is embedded in the app.
-// This is NOT a secret in the cryptographic sense (anyone can extract it) — it is a speed bump that keeps
-// random scripts from using the gateway as a free LLM proxy, combined with per-install and per-IP rate limits
-// on the Worker. The real provider keys never leave the Worker.
-const BUILD_INFO = (() => { try { return require('../build-info.json'); } catch (_) { return {}; } })();
-const BUILD_TOKEN = process.env.ORCA_BUILD_TOKEN || BUILD_INFO.buildToken || APP.buildToken || 'orca-public-build';
-function authHeaders(pathname) {
-  const ts = Math.floor(Date.now() / 1000).toString();
-  const inst = installId();
-  const sig = crypto.createHmac('sha256', BUILD_TOKEN).update(`${ts}.${inst}.${pathname}`).digest('hex');
-  return { 'X-ORCA-Client': VERSION, 'X-ORCA-Install': inst, 'X-ORCA-TS': ts, 'X-ORCA-Sig': sig, 'X-ORCA-Channel': CHANNEL, 'User-Agent': UA };
-}
-
 // ---------- remote config ----------
 let remoteCfg = null, remoteAt = 0, remoteInflight = null;
-const DEFAULT_REMOTE = { models: null, notice: null, minVersion: null, flags: {}, fetchedAt: 0, source: 'builtin' };
+const DEFAULT_REMOTE = { notice: null, minVersion: null, flags: {}, fetchedAt: 0, source: 'builtin' };
 function cachePath() { return path.join(config.getDataDir(), 'remote-config.json'); }
 function loadCachedRemote() {
   if (remoteCfg) return remoteCfg;
@@ -73,14 +53,13 @@ async function refreshRemote(force = false) {
   if (remoteInflight) return remoteInflight;
   remoteInflight = (async () => {
     const sources = [];
-    if (GATEWAY) sources.push({ url: `${GATEWAY}/v1/config?v=${VERSION}&ch=${CHANNEL}`, headers: authHeaders('/v1/config') });
     sources.push({ url: `https://raw.githubusercontent.com/${REPO}/main/remote/config.json` });
     sources.push({ url: `https://cdn.jsdelivr.net/gh/${REPO}@main/remote/config.json` });
     for (const s of sources) {
       try {
         const r = await fetchJson(s.url, s.headers || {});
         if (r.status === 200 && r.json && typeof r.json === 'object') {
-          remoteCfg = { ...DEFAULT_REMOTE, ...r.json, fetchedAt: now, source: s.url.includes('workers.dev') || (GATEWAY && s.url.startsWith(GATEWAY)) ? 'gateway' : 'github' };
+          remoteCfg = { ...DEFAULT_REMOTE, ...r.json, fetchedAt: now, source: 'github' };
           remoteAt = now;
           try { fs.writeFileSync(cachePath(), JSON.stringify(remoteCfg, null, 2)); } catch (_) {}
           return remoteCfg;
@@ -93,18 +72,6 @@ async function refreshRemote(force = false) {
   try { return await remoteInflight; } finally { remoteInflight = null; }
 }
 function remote() { return remoteCfg || loadCachedRemote(); }
-
-// ---------- gateway health ----------
-let gwState = { ok: null, checkedAt: 0, error: '' };
-async function gatewayHealth(force = false) {
-  if (!GATEWAY) return { ok: false, error: 'no gateway configured', configured: false };
-  if (!force && Date.now() - gwState.checkedAt < 60000) return { ...gwState, configured: true, url: GATEWAY };
-  try {
-    const r = await fetchJson(`${GATEWAY}/v1/health`, authHeaders('/v1/health'), 6000);
-    gwState = { ok: r.status === 200 && !!r.json?.ok, checkedAt: Date.now(), error: r.status === 200 ? '' : `HTTP ${r.status}`, models: r.json?.models || null };
-  } catch (e) { gwState = { ok: false, checkedAt: Date.now(), error: e.message }; }
-  return { ...gwState, configured: true, url: GATEWAY };
-}
 
 // ---------- updates ----------
 function cmpVer(a, b) { // semver-ish compare, ignores pre-release tags except that "x.y.z-beta" < "x.y.z"
@@ -120,10 +87,9 @@ async function checkForUpdates(force = false) {
   try {
     const rem = await refreshRemote();
     let rel = null;
-    // 1) GitHub Releases (public repo). 2) gateway mirror (if GitHub is blocked for the user).
+    // GitHub Releases of the public repo (raw + jsDelivr mirrors are used for the small remote config).
     const gh = await fetchJson(`https://api.github.com/repos/${REPO}/releases/latest`, { accept: 'application/vnd.github+json' }, 10000).catch(() => null);
     if (gh && gh.status === 200 && gh.json && gh.json.tag_name) rel = gh.json;
-    if (!rel && GATEWAY) { const g = await fetchJson(`${GATEWAY}/v1/release?ch=${CHANNEL}`, authHeaders('/v1/release'), 10000).catch(() => null); if (g && g.status === 200 && g.json && g.json.tag_name) rel = g.json; }
     if (!rel) throw new Error(gh ? `GitHub HTTP ${gh.status}` : 'offline');
     const latest = String(rel.tag_name).replace(/^v/, '');
     const assets = (rel.assets || []).map((a) => ({ name: a.name, url: a.browser_download_url, size: a.size }));
@@ -200,4 +166,4 @@ function applyUpdate() {
   return { restarting: true };
 }
 
-module.exports = { VERSION, BUILD_INFO, REPO, GATEWAY, CHANNEL, APP, installId, authHeaders, refreshRemote, remote, gatewayHealth, checkForUpdates, updateState, downloadUpdate, downloadState, applyUpdate, cmpVer };
+module.exports = { VERSION, BUILD_INFO, REPO, CHANNEL, APP, installId, refreshRemote, remote, checkForUpdates, updateState, downloadUpdate, downloadState, applyUpdate, cmpVer };

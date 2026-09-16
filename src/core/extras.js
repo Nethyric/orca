@@ -126,11 +126,20 @@ function makeTools({ safe, rel, WS }) {
   function visionModel() {
     const c = config.load();
     const v = c.vision || {};
-    if (v.model && (v.apiKey || (v.provider && c.keys[v.provider]))) {
-      const base = v.baseUrl || (config.PROVIDERS[v.provider] || {}).baseUrl || 'https://openrouter.ai/api/v1';
-      return { baseUrl: base.replace(/\/+$/, ''), apiKey: v.apiKey || c.keys[v.provider], model: v.model };
+    const pv = (c.providers || {});
+    const keyOf = (id) => (pv[id] && pv[id].apiKey) || '';
+    const urlOf = (id) => (pv[id] && pv[id].baseUrl) || '';
+    // 1) explicit choice: custom endpoint or one of the user's providers (+ optional model override)
+    if (v.provider === 'custom' && v.baseUrl && v.model) return { baseUrl: v.baseUrl.replace(/\/+$/, ''), apiKey: v.apiKey || '', model: v.model };
+    if (v.provider && pv[v.provider]) {
+      const p = pv[v.provider]; const m = v.model || ((p.models || []).find((x) => x.attachment) || {}).id;
+      const base = v.baseUrl || p.baseUrl; const key = v.apiKey || p.apiKey;
+      if (m && base && (key || p.local)) return { baseUrl: base.replace(/\/+$/, ''), apiKey: key || '', model: m };
     }
-    if (c.keys.openrouter) return { baseUrl: 'https://openrouter.ai/api/v1', apiKey: c.keys.openrouter, model: v.model || 'google/gemma-4-26b-a4b-it:free' };
+    // 2) auto: any user provider whose catalog says a selected model accepts images
+    for (const [, p] of Object.entries(pv)) { const m = (p.models || []).find((x) => x.attachment); if ((p.apiKey || p.local) && m && p.baseUrl) return { baseUrl: p.baseUrl.replace(/\/+$/, ''), apiKey: p.apiKey || '', model: m.id }; }
+    // 3) legacy: a bare key + model typed directly
+    if (v.model && v.apiKey && v.baseUrl) return { baseUrl: v.baseUrl.replace(/\/+$/, ''), apiKey: v.apiKey, model: v.model };
     return null;
   }
   async function describeWithVision(absPath, question) {
@@ -358,13 +367,18 @@ function makeTools({ safe, rel, WS }) {
       for (const [i, d] of (r.json.data || []).entries()) { const f = path.join(outDir, `${base}${count > 1 ? '-' + (i + 1) : ''}.png`); if (d.b64_json) fs.writeFileSync(f, Buffer.from(d.b64_json, 'base64')); else if (d.url) await download(d.url, f); files.push({ path: rel(f), bytes: fs.statSync(f).size }); }
       return { ok: true, provider: 'openai-compatible', model: g.model || 'gpt-image-1', files, prompt };
     }
-    if (g.provider === 'openrouter' || (!g.provider && c.keys.openrouter && g.preferOpenRouter)) {
-      const key = g.apiKey || c.keys.openrouter;
-      const r = await fetchJson('https://openrouter.ai/api/v1/chat/completions', { method: 'POST', headers: { authorization: 'Bearer ' + key, 'content-type': 'application/json' }, body: JSON.stringify({ model: g.model || 'google/gemini-2.5-flash-image', messages: [{ role: 'user', content: prompt }], modalities: ['image', 'text'] }) }, 180000);
+    const up = (c.providers || {})[g.provider];
+    if (g.provider && g.provider !== 'openai' && (up || g.baseUrl)) {
+      // any chat-completions provider whose model returns images in message.images (e.g. Gemini-image class models)
+      const key = g.apiKey || (up && up.apiKey) || '';
+      const base = (g.baseUrl || (up && up.baseUrl) || '').replace(/\/+$/, '');
+      if (!base) return { error: 'image provider has no base URL' };
+      if (!g.model) return { error: 'set a model id for the image provider in Settings → Agent → Image generation' };
+      const r = await fetchJson(base + '/chat/completions', { method: 'POST', headers: { authorization: 'Bearer ' + key, 'content-type': 'application/json' }, body: JSON.stringify({ model: g.model, messages: [{ role: 'user', content: prompt }], modalities: ['image', 'text'] }) }, 180000);
       const imgs = r.json?.choices?.[0]?.message?.images || [];
-      if (r.status >= 400 || !imgs.length) return { error: `openrouter image HTTP ${r.status}: ${r.text.slice(0, 300)}` };
+      if (r.status >= 400 || !imgs.length) return { error: `image provider HTTP ${r.status}: ${r.text.slice(0, 300)}` };
       for (const [i, im] of imgs.entries()) { const url = im.image_url?.url || ''; const m = url.match(/^data:image\/(\w+);base64,(.+)$/); const f = path.join(outDir, `${base}${imgs.length > 1 ? '-' + (i + 1) : ''}.${m ? m[1].replace('jpeg', 'jpg') : 'png'}`); if (m) fs.writeFileSync(f, Buffer.from(m[2], 'base64')); else await download(url, f); files.push({ path: rel(f), bytes: fs.statSync(f).size }); }
-      return { ok: true, provider: 'openrouter', model: g.model || 'google/gemini-2.5-flash-image', files, prompt };
+      return { ok: true, provider: g.provider, model: g.model, files, prompt };
     }
     // Provider B (default, free, no key): Pollinations
     const errors = [];
@@ -533,11 +547,51 @@ function makeTools({ safe, rel, WS }) {
     return runSubagent({ description, prompt, model, maxSteps: Math.min(+max_steps || 14, 30) });
   }
 
+  // ---- headless Chrome discovery (Chrome/Edge/Chromium on the user's machine; Electron's own binary as a last resort) ----
+  function findChrome() {
+    const chromes = isWin ? [path.join(process.env['PROGRAMFILES'] || 'C:\\Program Files', 'Google\\Chrome\\Application\\chrome.exe'), path.join(process.env['PROGRAMFILES(X86)'] || 'C:\\Program Files (x86)', 'Google\\Chrome\\Application\\chrome.exe'), path.join(process.env.LOCALAPPDATA || '', 'Google\\Chrome\\Application\\chrome.exe'), path.join(process.env['PROGRAMFILES(X86)'] || 'C:\\Program Files (x86)', 'Microsoft\\Edge\\Application\\msedge.exe'), path.join(process.env['PROGRAMFILES'] || 'C:\\Program Files', 'Microsoft\\Edge\\Application\\msedge.exe'), path.join(process.env.LOCALAPPDATA || '', 'Chromium\\Application\\chrome.exe'), path.join(process.env.LOCALAPPDATA || '', 'BraveSoftware\\Brave-Browser\\Application\\brave.exe')] : process.platform === 'darwin' ? ['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge', '/Applications/Chromium.app/Contents/MacOS/Chromium', '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser'] : ['google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser', 'microsoft-edge', 'brave-browser'];
+    for (const c of chromes) { if (!c) continue; if (path.isAbsolute(c) ? fs.existsSync(c) : (() => { try { execSync('command -v ' + c, { stdio: 'ignore' }); return true; } catch (_) { return false; } })()) return c; }
+    // Playwright's cached chromium (dev machines)
+    try { const home = os.homedir(); const roots = [path.join(home, '.cache', 'ms-playwright'), path.join(process.env.LOCALAPPDATA || '', 'ms-playwright')]; for (const r of roots) { if (!fs.existsSync(r)) continue; for (const d of fs.readdirSync(r)) { const cands = [path.join(r, d, 'chrome-linux', 'chrome'), path.join(r, d, 'chrome-headless-shell-linux64', 'chrome-headless-shell'), path.join(r, d, 'chrome-win', 'chrome.exe'), path.join(r, d, 'chrome-headless-shell-win64', 'chrome-headless-shell.exe')]; for (const c of cands) if (fs.existsSync(c)) return c; } } } catch (_) {}
+    return null;
+  }
+  // ---- browser_check: load a page in headless Chrome, capture console errors + uncaught exceptions + a screenshot ----
+  // Uses --remote-debugging-pipe? No: simplest robust path = Chrome's --dump-dom + --enable-logging to a file catches console.error/exceptions.
+  async function browserCheck({ url, width = 1280, height = 800, wait_ms = 2500, output = 'screenshots/check.png', keys = [] }) {
+    const bin = findChrome();
+    if (!bin) return { ok: false, error: 'No Chrome/Edge/Chromium found on this machine — do a static check instead (node --check on scripts, matching tags/ids).' };
+    let target = url;
+    if (!/^https?:\/\//i.test(target)) { const f = safe(target); if (!fs.existsSync(f)) return { error: 'file not found: ' + target }; target = 'file:///' + f.replace(/\\/g, '/'); }
+    const dest = safe(output); fs.mkdirSync(path.dirname(dest), { recursive: true });
+    const tmpd = fs.mkdtempSync(path.join(os.tmpdir(), 'orca-bc-')); const logFile = path.join(tmpd, 'chrome_debug.log');
+    // A tiny harness page loads the target in an iframe and records errors from it (same-origin for file:// with --allow-file-access-from-files),
+    // then also simulates key presses so games advance a few frames before the screenshot.
+    const harness = path.join(tmpd, 'harness.html');
+    const keysJs = JSON.stringify((Array.isArray(keys) ? keys : String(keys || '').split(',')).map((k) => String(k).trim()).filter(Boolean).slice(0, 12));
+    fs.writeFileSync(harness, `<!doctype html><html><body style="margin:0"><iframe id=f src="${target.replace(/"/g, '&quot;')}" style="border:0;width:${width}px;height:${height}px"></iframe><script>
+const errs=[];const f=document.getElementById('f');
+function hook(w){try{w.addEventListener('error',e=>errs.push('ERROR: '+(e.message||e.type)+' @'+(e.filename||'')+':'+(e.lineno||''))); w.addEventListener('unhandledrejection',e=>errs.push('UNHANDLED PROMISE: '+(e.reason&&e.reason.message||e.reason))); const ce=w.console.error.bind(w.console); w.console.error=(...a)=>{errs.push('console.error: '+a.map(x=>x&&x.stack||String(x)).join(' '));ce(...a)}; const cw=w.console.warn.bind(w.console); w.console.warn=(...a)=>{errs.push('console.warn: '+a.map(String).join(' '));cw(...a)};}catch(e){errs.push('HOOK FAILED (cross-origin?): '+e.message)}}
+f.addEventListener('load',()=>{try{hook(f.contentWindow)}catch(e){errs.push('no access: '+e.message)}
+ const ks=${keysJs}; let i=0; const tick=()=>{ if(i<ks.length){ try{ const k=ks[i++]; const ev=(t)=>new KeyboardEvent(t,{key:k,code:k,bubbles:true}); f.contentWindow.document.dispatchEvent(ev('keydown')); f.contentWindow.dispatchEvent(ev('keydown')); f.contentWindow.document.dispatchEvent(ev('keyup')); }catch(e){} setTimeout(tick,220);} }; setTimeout(tick,600);
+ setTimeout(()=>{ let info={}; try{ const d=f.contentDocument; info={title:d.title, bodyText:(d.body&&d.body.innerText||'').slice(0,600), canvases:d.querySelectorAll('canvas').length, imgsBroken:[...d.images].filter(i=>i.complete&&i.naturalWidth===0).length, links:d.links.length, scripts:d.scripts.length}; }catch(e){info={err:e.message}}
+ console.log('ORCA_CHECK '+JSON.stringify({errors:errs.slice(0,40),info})); },${Math.min(Math.max(+wait_ms || 2500, 500), 15000)});
+});
+</script></body></html>`);
+    const args = ['--headless=new', '--disable-gpu', '--no-sandbox', '--hide-scrollbars', '--allow-file-access-from-files', '--autoplay-policy=no-user-gesture-required', '--enable-logging=stderr', '--v=0', `--window-size=${width},${height}`, `--screenshot=${dest}`, `--virtual-time-budget=${Math.min(+wait_ms + 4000, 20000)}`, '--user-data-dir=' + path.join(tmpd, 'ud'), 'file:///' + harness.replace(/\\/g, '/')];
+    const r = await run(bin, args, { timeout: 60 });
+    let report = null; const m = r.out.match(/ORCA_CHECK (\{.*\})/); if (m) { try { report = JSON.parse(m[1]); } catch (_) {} }
+    const consoleErrs = [...r.out.matchAll(/CONSOLE.*?"(.*?)", source: (.*?) \(\d+\)/g)].map((x) => x[1]).filter((t) => !/ORCA_CHECK/.test(t)).slice(0, 20);
+    try { fs.rmSync(tmpd, { recursive: true, force: true }); } catch (_) {}
+    const errors = [...new Set([...(report ? report.errors : []), ...consoleErrs.filter((e) => /error|exception|failed|cannot|undefined|null/i.test(e))])];
+    const out = { ok: errors.length === 0, url: url, errors, info: report ? report.info : null, screenshot: fs.existsSync(dest) ? rel(dest) : null, note: errors.length ? 'Fix these errors, then run browser_check again.' : 'No runtime errors detected. Look at the screenshot with view_image if layout matters.' };
+    if (!report && !fs.existsSync(dest)) out.error = 'Chrome did not produce a report: ' + r.out.slice(-300);
+    return out;
+  }
+
   // ---- screenshots of URLs / local HTML for the agent to inspect (via headless Chrome if present) ----
   async function screenshotUrl({ url, output = 'screenshots/page.png', width = 1280, height = 800, full_page = false }) {
     const dest = safe(output); fs.mkdirSync(path.dirname(dest), { recursive: true });
-    const chromes = isWin ? [path.join(process.env['PROGRAMFILES'] || 'C:\\Program Files', 'Google\\Chrome\\Application\\chrome.exe'), path.join(process.env['PROGRAMFILES(X86)'] || 'C:\\Program Files (x86)', 'Google\\Chrome\\Application\\chrome.exe'), path.join(process.env.LOCALAPPDATA || '', 'Google\\Chrome\\Application\\chrome.exe'), path.join(process.env['PROGRAMFILES(X86)'] || 'C:\\Program Files (x86)', 'Microsoft\\Edge\\Application\\msedge.exe'), path.join(process.env['PROGRAMFILES'] || 'C:\\Program Files', 'Microsoft\\Edge\\Application\\msedge.exe')] : ['google-chrome', 'chromium', 'chromium-browser', '/usr/bin/google-chrome-stable'];
-    let bin = null; for (const c of chromes) { if (!c) continue; if (path.isAbsolute(c) ? fs.existsSync(c) : (() => { try { execSync('command -v ' + c, { stdio: 'ignore' }); return true; } catch (_) { return false; } })()) { bin = c; break; } }
+    const bin = findChrome();
     if (!bin) return { error: 'No Chrome/Edge found for screenshots.' };
     if (!/^https?:\/\//i.test(url)) { const f = safe(url); if (!fs.existsSync(f)) return { error: 'file not found: ' + url }; url = 'file:///' + f.replace(/\\/g, '/'); }
     const r = await run(bin, ['--headless=new', '--disable-gpu', '--no-sandbox', '--hide-scrollbars', `--window-size=${width},${height}`, `--screenshot=${dest}`, ...(full_page ? ['--full-page'] : []), '--virtual-time-budget=6000', url], { timeout: 60 });
@@ -558,6 +612,7 @@ function makeTools({ safe, rel, WS }) {
     },
     ocr_image: async ({ path: p, languages }) => { const f = safe(p); if (!fs.existsSync(f)) return { error: 'not found: ' + p }; const o = await ocrImage(f, Array.isArray(languages) && languages.length ? languages : undefined); return { path: p, ...o }; },
     screenshot: screenshotUrl,
+    browser_check: browserCheck,
     social_download: socialDownload,
     social_trending: socialTrending,
     generate_image: generateImage,
@@ -569,6 +624,7 @@ function makeTools({ safe, rel, WS }) {
     task,
   };
   const SCHEMAS = [
+    { type: 'function', function: { name: 'browser_check', description: 'Load a local HTML file (workspace path) or URL in headless Chrome and report runtime problems: uncaught exceptions, console.error/warn, unhandled promise rejections, broken images, plus page info (title, text excerpt, canvas count) and a screenshot. Optional `keys` (e.g. ["ArrowRight","ArrowRight"," "]) are pressed before the screenshot so games/apps advance. ALWAYS run this after building or changing a web page/app/game, fix every error, re-run until ok:true.', parameters: { type: 'object', properties: { url: { type: 'string', description: 'workspace path like site/index.html or an http(s) URL' }, keys: { type: 'array', items: { type: 'string' }, description: 'key names to press in order (KeyboardEvent.key values)' }, wait_ms: { type: 'number', description: 'time to let the page run before reporting (default 2500)' }, width: { type: 'number' }, height: { type: 'number' }, output: { type: 'string', description: 'screenshot path (default screenshots/check.png)' } }, required: ['url'] } } },
     { type: 'function', function: { name: 'view_image', description: 'Look at an image (workspace path, absolute path or URL): returns size/format, text read by OCR (English + Persian), and — when a vision model is configured — a full visual description. Use for screenshots, error images, UI mockups, photos the user attached (they are saved under attachments/).', parameters: { type: 'object', properties: { path: { type: 'string' }, question: { type: 'string', description: 'what to look for' }, ocr: { type: 'boolean' }, languages: { type: 'array', items: { type: 'string' }, description: 'tesseract langs, default ["eng","fas"]' } }, required: ['path'] } } },
     { type: 'function', function: { name: 'screenshot', description: 'Render a URL or local HTML file in headless Chrome/Edge, save a PNG and OCR it — verify web pages you built.', parameters: { type: 'object', properties: { url: { type: 'string' }, output: { type: 'string' }, width: { type: 'integer' }, height: { type: 'integer' }, full_page: { type: 'boolean' } }, required: ['url'] } } },
     { type: 'function', function: { name: 'social_download', description: 'Download videos/photos/audio from Instagram (posts, reels, profiles → latest posts), TikTok (no watermark, photo carousels + sound), X/Twitter (photos + videos), YouTube (videos, Shorts, playlists) and 1800+ other sites. Saves into workspace downloads/<platform>/. For login-walled content pass cookies (browser name or cookies.txt path).', parameters: { type: 'object', properties: { url: { type: 'string' }, output_dir: { type: 'string', description: 'default downloads' }, quality: { type: 'string', description: 'best | 1080 | 720 | small' }, audio_only: { type: 'boolean' }, no_watermark: { type: 'boolean' }, cookies: { type: 'string', description: '"chrome"|"firefox"|"edge" or path to cookies.txt' }, max_items: { type: 'integer', description: 'max items for playlists/profiles/carousels' } }, required: ['url'] } } },

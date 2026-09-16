@@ -1,0 +1,32 @@
+name: Seal vault (rotate built-in keys)
+
+# Run this whenever you change the UPSTREAMS secret (add / replace / remove provider keys).
+# It encrypts the secret to the app's public key and commits remote/vault.json (ciphertext only).
+# Every running app picks the new keys up within 15 minutes. No release needed, nothing visible to users.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 3 * * 1'   # weekly re-seal (fresh nonce) — harmless, keeps the file from looking stale
+
+permissions:
+  contents: write
+
+jobs:
+  seal:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - name: Validate upstreams (each key answers once)
+        env: { UPSTREAMS: ${{ secrets.UPSTREAMS }} }
+        run: printf '%s' "$UPSTREAMS" | node scripts/vault.js check || echo "::warning::some upstreams failed the probe — sealing anyway (the app skips dead keys automatically)"
+      - name: Seal
+        env: { UPSTREAMS: ${{ secrets.UPSTREAMS }} }
+        run: printf '%s' "$UPSTREAMS" | node scripts/vault.js seal
+      - name: Commit
+        run: |
+          git config user.name "orca-bot"
+          git config user.email "orca-bot@users.noreply.github.com"
+          git add remote/vault.json
+          git diff --cached --quiet && echo "vault unchanged" || (git commit -m "vault: reseal $(date -u +%Y-%m-%dT%H:%MZ)" && git push)

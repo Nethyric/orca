@@ -1,9 +1,9 @@
 {
-  "name": "ORCA Agent",
+  "name": "ORCA",
   "company": "Nethyric",
   "repo": "Nethyric/orca",
-  "gateway": "https://orca-gateway.nethyric.workers.dev",
   "updateChannel": "stable",
   "homepage": "https://github.com/Nethyric/orca",
-  "defaultLanguage": "en"
+  "defaultLanguage": "en",
+  "vaultPublicKey": "MCowBQYDK2VuAyEAr6384WcM5a06Bg1Jb0dOJSOPBP+f2rGyhgN82moc0Do="
 }

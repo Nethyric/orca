@@ -368,7 +368,7 @@ function riskOf(name, args) {
   if (name === 'run_python' || name === 'run_node') return 'low';
   if (name === 'write_file' || name === 'edit_file') return 'low';
   if (/^(write_docx|write_xlsx|write_pptx|media_)/.test(name)) return 'low';
-  if (/^(social_download|social_trending|generate_image|generate_video|screenshot|project_init|task)$/.test(name)) return 'low';
+  if (/^(social_download|social_trending|generate_image|generate_video|screenshot|browser_check|project_init|task)$/.test(name)) return 'low';
   return 'none';
 }
 

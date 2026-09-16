@@ -9,6 +9,8 @@ const store = require('./core/store');
 const tools = require('./core/tools');
 const { runAgent, stopRun, approve, quick, routeAuto, compact } = require('./core/agent');
 const remote = require('./core/remote');
+const vault = require('./core/vault');
+const catalog = require('./core/catalog');
 const zlib = require('zlib');
 
 const UI = path.join(__dirname, '..', 'ui');
@@ -110,30 +112,34 @@ async function handleApi(req, res, url) {
     req.on('close', () => { clearInterval(ka); clients.delete(res); });
     return;
   }
-  if (p === '/api/update' && req.method === 'GET') return json(res, 200, { ...(await remote.checkForUpdates(q.get('force') === '1')), download: remote.downloadState(), gateway: await remote.gatewayHealth(q.get('force') === '1'), remote: remote.remote(), repo: remote.REPO, channel: remote.CHANNEL });
+  if (p === '/api/update' && req.method === 'GET') return json(res, 200, { ...(await remote.checkForUpdates(q.get('force') === '1')), download: remote.downloadState(), vault: vault.status(), remote: remote.remote(), repo: remote.REPO, channel: remote.CHANNEL });
   if (p === '/api/update/download' && req.method === 'POST') { remote.downloadUpdate((d) => broadcast({ event: 'update', data: { download: d } })).then((d) => broadcast({ event: 'update', data: { download: d, ready: d.ready, error: d.error } })); return json(res, 200, { ok: true }); }
   if (p === '/api/update/apply' && req.method === 'POST') { try { const r = remote.applyUpdate(); if (r.restarting) setTimeout(() => process.exit(0), 800); return json(res, 200, r); } catch (e) { return json(res, 400, { error: e.message }); } }
   if (p === '/api/update/simulate' && req.method === 'POST' && process.env.ORCA_DEV) { broadcast({ event: 'update', data: { available: true, latest: body.version || '9.9.9', url: 'https://github.com/' + remote.REPO + '/releases', notes: body.notes || '- test release', asset: { name: 'ORCA-Agent-9.9.9-win-x64.zip' }, mustUpdate: !!body.must } }); return json(res, 200, { ok: true }); }
   if (p === '/api/update/dismiss' && req.method === 'POST') { config.save({ dismissedUpdate: body.version || '' }); return json(res, 200, { ok: true }); }
-  if (p === '/api/health') return json(res, 200, { ok: true, version: require('../package.json').version, gateway: config.GATEWAY || null, repo: remote.REPO, tools: tools.TOOL_NAMES, electron: !!process.versions.electron, bins: { ffmpeg: !!tools.extras.findBin('ffmpeg'), ytdlp: !!tools.extras.findBin('yt-dlp') }, vision: !!tools.extras.visionModel() });
+  if (p === '/api/health') return json(res, 200, { ok: true, version: require('../package.json').version, builtin: vault.enabled(), vault: vault.status().ok, repo: remote.REPO, tools: tools.TOOL_NAMES, electron: !!process.versions.electron, bins: { ffmpeg: !!tools.extras.findBin('ffmpeg'), ytdlp: !!tools.extras.findBin('yt-dlp') }, vision: !!tools.extras.visionModel() });
   if (p === '/api/config' && req.method === 'GET') return json(res, 200, config.publicView());
   if (p === '/api/config' && req.method === 'POST') {
     const patch = { ...body };
-    if (patch.keys) for (const k of Object.keys(patch.keys)) if (!patch.keys[k] || String(patch.keys[k]).includes('…')) delete patch.keys[k];
+    delete patch.keys;
+    if (patch.providers && typeof patch.providers === 'object') for (const pv of Object.values(patch.providers)) if (pv && pv.apiKey && String(pv.apiKey).includes('…')) delete pv.apiKey; // masked value → keep stored key
     if (patch.customModels) patch.customModels = patch.customModels.map((m) => { const old = config.load().customModels.find((x) => x.key === m.key); if (m.apiKey && m.apiKey.includes('…') && old) m.apiKey = old.apiKey; return m; });
     config.save(patch); return json(res, 200, config.publicView());
   }
   if (p === '/api/models/test' && req.method === 'POST') {
-    const cfg = body.key ? config.resolve(body.key) : { baseUrl: body.baseUrl, apiKey: body.apiKey, model: body.model, maxTokens: 50, label: body.model };
-    if (!cfg) return json(res, 200, { ok: false, error: 'unknown model' });
     const t0 = Date.now();
     try {
-      const r = await fetch(cfg.baseUrl.replace(/\/+$/, '') + '/chat/completions', { method: 'POST', headers: { authorization: 'Bearer ' + cfg.apiKey, 'content-type': 'application/json' }, body: JSON.stringify({ model: cfg.model, messages: [{ role: 'user', content: 'Reply with the single word: OK' }], max_tokens: 100, tools: tools.SCHEMAS.slice(0, 1), tool_choice: 'none' }) });
-      const txt = await r.text();
-      if (!r.ok) return json(res, 200, { ok: false, status: r.status, error: txt.slice(0, 300), ms: Date.now() - t0 });
-      return json(res, 200, { ok: true, ms: Date.now() - t0, sample: (JSON.parse(txt).choices?.[0]?.message?.content || '').slice(-60) });
-    } catch (e) { return json(res, 200, { ok: false, error: e.message, ms: Date.now() - t0 }); }
+      let sample;
+      if (body.key) sample = await quick(body.key, 'Reply with the single word: OK', 20);
+      else sample = await catalog.probe({ baseUrl: body.baseUrl, apiKey: body.apiKey, model: body.model, api: body.api });
+      return json(res, 200, { ok: true, ms: Date.now() - t0, sample: String(sample || '').slice(-60) });
+    } catch (e) { return json(res, 200, { ok: false, status: e.status, error: String(e.message || e).slice(0, 300), ms: Date.now() - t0 }); }
   }
+  // ---- provider catalog (models.dev mirror, cached) ----
+  if (p === '/api/providers/catalog' && req.method === 'GET') return json(res, 200, await catalog.list(q.get('refresh') === '1'));
+  if (p === '/api/providers/models' && req.method === 'GET') return json(res, 200, await catalog.models(q.get('id')));
+  if (p === '/api/providers/discover' && req.method === 'POST') { try { const st = body.id && config.load().providers[body.id]; const b = { ...body, apiKey: body.apiKey || (st && st.apiKey) || '', baseUrl: body.baseUrl || (st && st.baseUrl) || '' }; return json(res, 200, { models: await catalog.discover(b) }); } catch (e) { return json(res, 200, { models: [], error: e.message }); } }
+  if (p === '/api/vault' && req.method === 'GET') { if (q.get('refresh') === '1') await vault.refresh(true).catch(() => {}); return json(res, 200, vault.status()); }
   if (p === '/api/openrouter/models') {
     if (orCache && Date.now() - orCache.ts < 6 * 3600e3) return json(res, 200, { models: orCache.models, cached: true });
     try { const r = await fetch('https://openrouter.ai/api/v1/models'); const j = await r.json(); const models = (j.data || []).map((m) => ({ id: m.id, name: m.name, ctx: m.context_length, prompt: m.pricing?.prompt, completion: m.pricing?.completion, tools: (m.supported_parameters || []).includes('tools') })); orCache = { ts: Date.now(), models }; return json(res, 200, { models }); }
@@ -307,12 +313,15 @@ function createServer() {
   });
 }
 
+let lastAnnounced = '';
 function startBackground() {
   const tick = async () => {
-    try { const rc = await remote.refreshRemote(); if (rc && Array.isArray(rc.models) && rc.models.length) config.setRemoteModels(rc.models); } catch (_) {}
-    try { const u = await remote.checkForUpdates(); if (u.available) broadcast({ event: 'update', data: { available: true, latest: u.latest, notes: u.notes, url: u.url, mustUpdate: u.mustUpdate } }); } catch (_) {}
+    try { await vault.refresh(); } catch (_) {}
+    try { await remote.refreshRemote(); } catch (_) {}
+    try { const u = await remote.checkForUpdates(); /* internally cached for 6 h */ if (u.available && u.latest !== lastAnnounced) { lastAnnounced = u.latest; broadcast({ event: 'update', data: { available: true, latest: u.latest, notes: u.notes, url: u.url, mustUpdate: u.mustUpdate } }); } } catch (_) {}
   };
-  setTimeout(tick, 4000); setInterval(tick, 6 * 60 * 60 * 1000).unref();
+  vault.refresh().catch(() => {}); // keys first — the first message must not wait for the update check
+  setTimeout(tick, 4000); setInterval(tick, 15 * 60 * 1000).unref();
 }
 function listen(port, host) {
   startBackground();

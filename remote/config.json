@@ -1,7 +1,5 @@
 {
-  "_comment": "Fallback remote config read straight from GitHub when the gateway is unreachable. Edit on GitHub → users pick it up within 15 minutes. Keys are NEVER stored here.",
-  "minVersion": null,
   "notice": null,
-  "models": null,
-  "flags": { "gateway": true }
+  "minVersion": null,
+  "flags": {}
 }
