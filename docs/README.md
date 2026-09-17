@@ -21,6 +21,22 @@ ORCA is a desktop AI agent. You describe a task; it plans, calls tools (shell, f
 5. If the model errors or hits a rate limit, ORCA fails over to the next built-in key/model automatically and tells you in a status line.
 6. The final answer is rendered as Markdown; produced files appear under *Outputs* and in the *Files* tab, from where you can open or preview them.
 
+### Long answers, long inputs, interruptions
+
+- **Output caps are invisible.** Built-in models can emit ~4k tokens per turn. When an answer is cut by that cap, ORCA asks the model to continue from exactly where it stopped and stitches the pieces — you see one answer that keeps streaming. Code fences and lists survive the seam.
+- **Long pastes go to a file.** Text over ~12 000 characters is saved to `attachments/paste-<timestamp>.txt`; the model gets a preview plus the path and reads or greps the file instead of re-typing it (which is what used to make long inputs loop).
+- **Nothing is lost on Stop or errors.** A stopped or failed answer keeps the text it already produced and shows **Continue** / **Retry** buttons. Answers that were streaming when the app closed are marked *interrupted* on the next start.
+- **Busy providers are handled.** Rate limits (429/503) on the free built-in keys trigger key rotation, then a short backoff sweep across all models ("All models are busy — retrying in 4 s"). Garbled or looping outputs are detected and re-asked from another model.
+- **Type while it works.** Messages sent while the agent is busy are queued above the composer and go out automatically when the current answer finishes.
+
+### Staying on track in long chats
+
+- **Pin** any message (yours or the agent's): pinned messages are re-injected into every following prompt, so decisions stay binding no matter how long the chat gets.
+- **Notes** (side panel → *Notes*): a per-chat scratchpad for terminology, constraints and decisions that the agent always sees.
+- **Branch** from any message to explore an alternative without losing the original thread; **Edit** a message to regenerate from that point; **Delete** to prune.
+- **Project memory** (`/init` → `ORCA.md`) has sections for *Decided*, *Inferred*, *Tried and failed* and *Current state*; the agent keeps them updated so it doesn't re-explore or retry dead ends in later chats.
+- The agent knows the current date and time, its maker ([Nethyric](https://github.com/Nethyric)), its version and where its source lives.
+
 ## Modes
 
 - **Direct** — one model, full tool access.
@@ -37,6 +53,10 @@ Runs keep going in the background: you can start a new chat or open another one 
 | `/compact` | Summarise the current chat's history to free context |
 | `/plan` | Toggle plan mode (investigate and propose, don't modify) |
 | `/help` | List commands |
+| `/export` | Download the chat as Markdown |
+| `/model <name>` | Switch the default model |
+| `/files` | Open the Files tab |
+| `/new`, `/clear` | Start a new chat |
 
 ## Keyboard shortcuts
 

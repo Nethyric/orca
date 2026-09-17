@@ -1,7 +1,7 @@
 {
   "name": "orca-agent",
   "productName": "ORCA Agent",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "ORCA — autonomous multi-model AI agent for your desktop. Open source by Nethyric.",
   "main": "src/main.js",
   "author": "Nethyric",

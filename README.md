@@ -20,6 +20,7 @@
   <a href="docs/README.md">Documentation</a> ·
   <a href="docs/providers.md">Providers</a> ·
   <a href="docs/api.md">API</a> ·
+  <a href="CHANGELOG.md">Changelog</a> ·
   <a href="docs/README.fa.md">فارسی</a>
 </p>
 
@@ -31,6 +32,7 @@ ORCA is a desktop agent that plans, writes code, runs it, reads the errors and f
 - **Any model.** Built-in models with automatic failover, plus your own providers (cloud or local). Keys never leave your device.
 - **Three ways to chat.** Direct, side-by-side comparison, or blind battle with a local leaderboard.
 - **Checkpoints and diffs.** Every file change is snapshotted; restore any step with one click.
+- **Built for long work.** Output caps are continued transparently, long pastes become files, stopped answers can be continued, and pins, notes and branches keep long chats on track.
 - **Four languages.** English, Русский, 中文, فارسی — with matching typography.
 - **Private.** No accounts, no telemetry. Everything is stored in a local data folder you control.
 

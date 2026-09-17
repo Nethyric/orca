@@ -32,7 +32,7 @@ All request and response bodies are JSON (`content-type: application/json`) unle
 ### `GET /api/health`
 
 ```json
-{ "ok": true, "version": "0.0.1", "builtin": true, "vault": true, "repo": "Nethyric/orca",
+{ "ok": true, "version": "0.0.2", "builtin": true, "vault": true, "repo": "Nethyric/orca",
   "tools": ["run_shell", "…"], "electron": false,
   "bins": { "ffmpeg": true, "ytdlp": true, "python": "python3" }, "vision": false }
 ```
@@ -41,14 +41,23 @@ All request and response bodies are JSON (`content-type: application/json`) unle
 
 ## Chats
 
-A **chat** is `{ id, title, mode, model, models, createdAt, updatedAt, pinned, messages[], votes[] }`. A **message** is `{ id, role: "user" | "assistant", content, ts, model?, modelKey?, lane?, runId?, status?, events?[], usage? }`. Assistant messages keep their run's event log (`events[] = { event, data, ts }`) so the UI can replay tool cards.
+A **chat** is `{ id, title, mode, model, models, createdAt, updatedAt, pinned, notes, tags[], forkedFrom?, messages[], votes[] }`. A **message** is `{ id, role: "user" | "assistant", content, ts, model?, modelKey?, lane?, runId?, status?, events?[], usage?, tookMs?, pinned?, partial?, interrupted?, error?, hidden?, pastedPath? }`. Assistant messages keep their run's event log (`events[] = { event, data, ts }`) so the UI can replay tool cards.
+
+- `status` is `running`, `done`, `question`, `stopped` or `error`. A stopped/errored message with text keeps it (`partial: true`) so the UI can offer **Continue**.
+- `hidden: true` marks internal user turns (e.g. the "continue" instruction) that the UI shows as a small note instead of a bubble.
+- `pastedPath` is set when a very long paste (> 12 000 characters) was saved to `attachments/paste-<timestamp>.txt` and only a preview was sent inline.
+- `usage` may carry `estimated: true` when the provider sent no usage chunk; `tookMs` is wall-clock time from the message creation to its final answer.
 
 | Method & path | Body / query | Response |
 |---|---|---|
-| `GET /api/chats` | — | `{ chats: [ { id, title, mode, model, models, pinned, createdAt, updatedAt, count, preview } ] }` (index only; pinned first, then newest) |
+| `GET /api/chats` | — | `{ chats: [ { id, title, mode, model, models, pinned, tags, hasNotes, pins, forked, createdAt, updatedAt, count, preview } ] }` (index only; pinned first, then newest) |
 | `POST /api/chats` | `{ mode?: "direct"|"side"|"battle", title? }` | the created chat |
 | `GET /api/chats/:id` | — | the full chat, or `404` |
-| `POST /api/chats/:id` | partial chat, e.g. `{ title }` or `{ pinned: true }` | the updated chat |
+| `POST /api/chats/:id` | partial chat, e.g. `{ title }`, `{ pinned: true }`, `{ notes: "…" }` or `{ tags: [ … ] }` | the updated chat |
+| `POST /api/chats/:id/messages/:mid` | `{ pinned: boolean }` | `{ ok, pinned }` — pin/unpin a message (pinned messages are re-injected into the prompt so they stay binding) |
+| `DELETE /api/chats/:id/messages/:mid` | — | `{ ok }` — deletes that message (and, for a user message, the answers it produced) |
+| `POST /api/chats/:id/fork` | `{ messageId, title? }` | the new chat: a copy of the conversation up to and including `messageId` (`forkedFrom: { chatId, messageId }`) |
+| `GET /api/chats/:id/pinned` | — | `{ pinned: [ { id, role, text, ts } ] }` |
 | `DELETE /api/chats/:id` | — | `{ ok: true }` |
 | `DELETE /api/chats/all` | — | `{ deleted: n }` |
 | `GET /api/chats/:id/export` | — | `text/markdown` attachment |
@@ -86,6 +95,8 @@ A **chat** is `{ id, title, mode, model, models, createdAt, updatedAt, pinned, m
 | `planMode` | Investigate and propose only; mutating tools are refused |
 | `autonomy` | Overrides the configured level for this run |
 | `regenerateFrom` | Message id: truncate the chat after it and regenerate |
+| `continueFrom` | Id of a stopped/errored assistant message: resume that answer from where it stopped (no `text` needed). The instruction is stored as a `hidden` user turn |
+| `webMode` | `true` forces research first (web_search → fetch_page) and answers with inline sources |
 | `images` | Workspace paths of images to attach (pre-analysed on upload) |
 | `lang` | UI language hint (`en`, `fa`, …) |
 
@@ -107,7 +118,7 @@ A single `text/event-stream` carrying every run's events. Each message is `data:
 
 | `event` | `data` | Meaning |
 |---|---|---|
-| `status` | `{ text, kind: "thinking"|"retry"|"fallback"|"compact", step? }` | Progress line |
+| `status` | `{ text, kind: "thinking"|"retry"|"fallback"|"compact"|"tools", step? }` | Progress line. `retry` also covers busy sweeps ("All models are busy — retrying in 4 s") |
 | `delta` | `{ type: "content"|"reasoning"|"reset", text? }` | Streaming tokens; `reset` clears what was streamed (retry/failover) |
 | `thought_done` | `{ text }` | Final reasoning text for the step |
 | `tool_call` | `{ id, name, args, risk }` | A tool is about to run |
@@ -117,10 +128,10 @@ A single `text/event-stream` carrying every run's events. Each message is `data:
 | `files` | `{ tool, files: [path] }` | Output files produced by a tool |
 | `todos` | `{ todos: [ { id, text, status } ] }` | Live checklist |
 | `sub_event` | `{ runId, event, data }` | Event from a sub-agent (`task` tool) |
-| `usage` | `{ prompt_tokens, completion_tokens }` | Cumulative token usage |
+| `usage` | `{ prompt_tokens, completion_tokens, estimated? }` | Cumulative token usage (`estimated` when the provider sent none) |
 | `question` | `{ id, question, options }` | The agent asks you something; reply with a normal `POST /api/send` |
 | `compacted` | `{}` | History was compacted mid-run |
-| `final` | `{ text, model, modelKey, usage }` | Final answer |
+| `final` | `{ text, model, modelKey, usage }` | Final answer. Long answers that hit the provider's output cap are continued automatically and stitched — the client only ever sees one `final` |
 | `error` | `{ text }` | Fatal error for this lane |
 | `stopped` | `{}` | Stopped by the user |
 | `done` | `{}` | Lane finished (always last) |
@@ -180,7 +191,7 @@ Returns the public view of the configuration: everything in `config.json` with s
   "models": [ { "key": "auto", "label": "ORCA", "tier": "auto", "builtin": true },
               { "key": "minimax", "label": "MiniMax M2.7", "vendor": "MiniMax", "tier": "strong", "builtin": true, "ready": true },
               { "key": "groq/llama-3.3-70b-versatile", "label": "llama-3.3-70b-versatile", "vendor": "Groq", "builtin": false, "ready": true } ],
-  "builtin": true, "version": "0.0.1", "dataDir": "…", "workspaceDir": "…",
+  "builtin": true, "version": "0.0.2", "dataDir": "…", "workspaceDir": "…",
   "app": { "name": "ORCA", "company": "Nethyric", "repo": "Nethyric/orca", "homepage": "…" }
 }
 ```
