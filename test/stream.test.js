@@ -13,7 +13,7 @@ new Function('module', 'exports', 'require', '__dirname', '__filename', src + '\
   m, m.exports, (p) => require(p.startsWith('.') ? path.resolve(__dirname, '..', 'src', 'core', p) : p), path.resolve(__dirname, '..', 'src', 'core'), 'agent.js');
 const { streamOnce, joinContinuation, cutRepetition, salvageArgs } = m.exports;
 
-const expect = { nested: 'Paris.', nested2: 'Paris.', rloop: 'Paris.', loop: 'The answer is 42.', plan: 'Here is the answer.', realclose: 'The real answer.', realclose2: 'The real answer.', cut: null, length: null, tiny: null, unterminated: null };
+const expect = { nested: 'Paris.', nested2: 'Paris.', rloop: 'Paris.', loop: 'The answer is 42.', plan: 'Here is the answer.', realclose: 'The real answer.', realclose2: 'The real answer.', cut: null, length: null, tiny: null, unterminated: null, fakestop: null, realstop: null };
 (async () => {
   const srv = spawn(process.execPath, [path.join(__dirname, 'fake-provider.js')], { stdio: 'ignore' });
   await new Promise((r) => setTimeout(r, 700));
@@ -22,7 +22,7 @@ const expect = { nested: 'Paris.', nested2: 'Paris.', rloop: 'Paris.', loop: 'Th
     for (const sc of Object.keys(expect)) {
       const events = []; let live = '';
       const r = await streamOnce({ baseUrl: 'http://127.0.0.1:8791', apiKey: 'x', model: sc, maxTokens: 100 }, [{ role: 'user', content: 'hi' }], (d) => { events.push(d.type); if (d.type === 'content') live += d.text; if (d.type === 'reset') live = ''; }, null, false, 0.5);
-      const ok = (!expect[sc] || r.content.trim() === expect[sc]) && live.trim() === r.content.trim() && (sc !== 'cut' || r.finish === 'cut') && (sc !== 'length' || r.finish === 'length');
+      const ok = (!expect[sc] || r.content.trim() === expect[sc]) && live.trim() === r.content.trim() && (sc !== 'cut' || r.finish === 'cut') && (sc !== 'length' || r.finish === 'length') && (sc !== 'fakestop' || r.finish === 'cut') && (sc !== 'realstop' || r.finish === 'stop');
       if (!ok) fail++;
       console.log(`${ok ? 'PASS' : 'FAIL'} [${sc}] finish=${r.finish} looped=${!!r.looped} content=${JSON.stringify(r.content.slice(0, 40))}`);
     }

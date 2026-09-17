@@ -12,6 +12,10 @@ const scenarios = {
   nested2: { chunks: ['<think>The user is asking a simple trivia question. I know the answer directly.', '\n\n\nParis.', '<think>\nDirect answer to a simple factual question.</think>', ...Array.from({length: 60}, () => ' Paris. No further reasoning needed. The capital of France is Paris. Answered directly without tools. The user asked for one word.')], finish: 'length' },
   cut: { chunks: ['Here is a long answer that the proxy will cut ', 'in the middle of a sentence because of a 300 s limit and'], finish: null, noDone: true },
   length: { chunks: ['Part one of the answer, ', 'ends abruptly at the token cap'], finish: 'length' },
+  // the gateway hit its own time limit but reported finish_reason "stop": long answer, still inside a ``` block
+  fakestop: { chunks: ['# Tutorial\n\nIntro paragraph.\n\n```js\n', ...Array.from({ length: 120 }, (_, i) => `const line${i} = doSomethingUseful(${i}); // keeps going\n`), 'const last = '], finish: 'stop' },
+  // a real stop with balanced fences must stay a stop
+  realstop: { chunks: ['# Tutorial\n\nIntro paragraph.\n\n```js\n', ...Array.from({ length: 120 }, (_, i) => `const line${i} = doSomethingUseful(${i}); // keeps going\n`), '```\n\nDone.'], finish: 'stop' },
   // a runaway write_file whose arguments never end (content first, no path) — the client must cut it and salvage
   bigtool: { tool: 'write_file', argChunks: ['{"content": "# Big Tutorial\\n\\n', ...Array.from({ length: 400 }, (_, i) => `Paragraph ${i} of the tutorial with enough words to make it long and realistic.\\n`)], finish: null, noDone: true },
 };

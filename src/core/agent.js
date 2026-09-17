@@ -224,7 +224,17 @@ function tidyAnswer(content, reasoning) {
   const out = []; for (const p of t.split(/\n{2,}/)) { if (out.length && out[out.length - 1].trim() === p.trim()) continue; out.push(p); }
   t = out.join('\n\n');
   const lines = t.split('\n'); const dl = []; for (const l of lines) { if (dl.length && l.trim() && dl[dl.length - 1].trim() === l.trim()) continue; dl.push(l); }
-  return dl.join('\n').trim();
+  t = dl.join('\n').trim();
+  // the whole (short) answer written twice back-to-back, the second time with Markdown emphasis:
+  // "Nethyric made me — ORCA v0.0.2. (…)Nethyric made me — **ORCA v0.0.2**. (…)" → keep the formatted half
+  if (t.length < 1200) {
+    const plain = (x) => x.replace(/[*_`~]/g, '').replace(/\s+/g, ' ').trim();
+    for (let cut = Math.floor(t.length / 2) - 40; cut <= Math.floor(t.length / 2) + 40 && cut > 20; cut++) {
+      const a = t.slice(0, cut), b = t.slice(cut);
+      if (plain(a) === plain(b)) { t = b.trim(); break; }
+    }
+  }
+  return t;
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -276,6 +286,16 @@ function collapseRepeats(text) {
   return t.replace(/^(.{1,80}?[.!?؟。])\s*(.{1,80}?)$/s, (m, a, b) => (a.startsWith(b) ? a : m)); // "Paris.Paris" → "Paris."
 }
 
+// A "stop" that cannot be a real stop: a long answer ending inside an open ``` block, or a stream that ran into the
+// proxy's time limit (~300 s) and ends mid-sentence. Some gateways report their own cut as finish_reason "stop".
+function suspiciousStop(text, elapsedMs) {
+  const t = String(text || ''); if (t.length < 2000) return false;
+  const openFence = (t.match(/```/g) || []).length % 2 === 1;
+  if (openFence) return true;
+  const tail = t.trimEnd().slice(-1);
+  return elapsedMs >= 270000 && !/[.!?؟。:)\]`*_>|-]$/.test(tail);
+}
+
 // rough token estimate when the provider sends no usage chunk (stream cut) — 1 token ≈ 4 chars of English/code, ≈ 2 chars of Persian/CJK
 function estimateUsage(messages, content, reasoning) {
   const tok = (t) => { t = String(t || ''); const wide = (t.match(/[\u0600-\u06FF\u0400-\u04FF\u4e00-\u9fff\u3040-\u30ff]/g) || []).length; return Math.round((t.length - wide) / 4 + wide / 2); };
@@ -313,6 +333,7 @@ async function streamOnce(cfg, messages, onDelta, signal, useTools, temperature,
   if (useTools) { body.tools = tools.SCHEMAS; body.tool_choice = 'auto'; }
   // watchdog: abort if the provider stalls (no bytes for STALL_MS) or never answers (CONNECT_MS)
   const ctl = new AbortController();
+  const startedAt = Date.now();
   let stalled = false, looped = false, loopCheckedAt = 0, oversized = false;
   const calls = new Map(); // tool calls by index (declared here so the catch handlers can salvage partial arguments)
   let drain = () => {}; // assigned below (needs the stream's buffers); the catch handlers call it too
@@ -440,6 +461,7 @@ async function streamOnce(cfg, messages, onDelta, signal, useTools, temperature,
   const tcs = [...calls.values()].filter((c) => c.function.name);
   if (useTools && !tcs.length) { const pt = parseTextToolCalls(sr.content); if (pt.calls.length) { tcs.push(...pt.calls); sr.content = pt.text; onDelta({ type: 'reset' }); if (sr.reasoning) onDelta({ type: 'reasoning', text: sr.reasoning }); if (sr.content) onDelta({ type: 'content', text: sr.content }); } }
   if (!finish && !sawDone && !tcs.length && sr.content.trim()) finish = 'cut'; // proxy/provider closed the stream early
+  if ((finish === 'stop' || !finish) && !tcs.length && suspiciousStop(sr.content, Date.now() - startedAt)) finish = 'cut'; // proxy time limit reported as a normal stop / [DONE] without finish_reason
   return { content: sr.content, reasoning: sr.reasoning, tool_calls: tcs, usage: usage || estimateUsage(messages, content, reasoning), finish };
   } catch (e) {
     if (oversized) {
@@ -636,7 +658,7 @@ async function runAgent(o) {
       try { res = await callModel(modelKey, ctxMsgs, { emit: emitC, signal: ctl.signal, temperature }); }
       catch (e) { if (stopped()) { emit('stopped', {}); return { api, checkpoints, stopped: true }; } emit('error', { text: e.message }); return { api, checkpoints, error: e.message }; }
       usedLabel = res.label;
-      if (res.usage) { totalUsage.prompt_tokens += res.usage.prompt_tokens || 0; totalUsage.completion_tokens += res.usage.completion_tokens || 0; emit('usage', { ...totalUsage }); }
+      if (res.usage) { totalUsage.prompt_tokens += res.usage.prompt_tokens || 0; totalUsage.completion_tokens += res.usage.completion_tokens || 0; if (res.usage.estimated) totalUsage.estimated = true; emit('usage', { ...totalUsage }); }
       if (res.reasoning) emit('thought_done', { text: res.reasoning.slice(0, 6000) });
 
       // Keep reasoning in the transcript sent back to the model (interleaved-thinking models like

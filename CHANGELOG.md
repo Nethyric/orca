@@ -14,7 +14,9 @@ All notable changes to ORCA are documented here. The format follows [Keep a Chan
 - Half-streamed answers on Stop/error keep their text and offer **Continue** / **Retry**; answers interrupted by a crash are marked on next start.
 - Edit/Retry on a user message ignores internal hidden turns; deleting a user message also removes its answers.
 - Chat list, timeline and pins render defensively when a chat file lacks optional fields.
-- Doubled opening words ("Paris.Paris. The capital…") and process narration ("The user asked… I'll answer concisely") are removed from final answers.
+- Doubled opening words ("Paris.Paris. The capital…"), an answer written twice back-to-back, and process narration ("The user asked… I'll answer concisely") are removed from final answers.
+- Runaway tool calls: when a model streams a huge `write_file` (content first, path last) and the gateway closes the stream after ~300 s, the arguments were unusable and the model retried the same call for 20+ minutes. The stream is now cut client-side at 24 KB, complete lines are saved to the named (or inferred) file, and the model is told to continue with `append`; tool calls are limited to ~5 000 characters each.
+- A gateway time-limit reported as a normal `stop` (long answer ending inside an open code block or mid-sentence after ~5 min) is treated as a cut and continued automatically.
 
 ### Added
 - **Pin messages** — pinned messages are re-injected into every following prompt so decisions stay binding.
@@ -27,7 +29,7 @@ All notable changes to ORCA are documented here. The format follows [Keep a Chan
 - Elapsed time and token usage per answer; `~` marks estimated usage.
 - Very long answers fold with a **Show more** bar; streaming render rate adapts to the answer length; code highlighting runs once, at the end.
 - Loop guard for identical successful tool calls; quieter status lines (one per model per reason).
-- Test suite: `node test/stream.test.js` (fake SSE provider exercising unterminated thinking, cuts, loops, nested tags).
+- Test suite: `node test/stream.test.js` (fake SSE provider exercising unterminated thinking, cuts, fake stops, runaway tool calls, loops, nested tags).
 - Three more built-in keys in the vault.
 
 ### API
