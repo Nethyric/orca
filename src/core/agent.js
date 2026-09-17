@@ -234,6 +234,9 @@ function tidyAnswer(content, reasoning) {
   }
   // a doubled opening ("Paris.Paris. The capital…", "سلام!سلام! …") — some models echo their first token
   t = t.replace(/^([^\n.!?؟。]{1,60}[.!?؟。])\s*\1(?=\s|$)/, '$1');
+  // a short answer glued to itself with no separator at all ("CI BUILD OKCI BUILD OK", "42 42")
+  { const x = t.trim(); if (x.length >= 8 && x.length <= 160 && x.length % 2 === 0 && /[\p{L}]/u.test(x) && x.slice(0, x.length / 2) === x.slice(x.length / 2)) t = x.slice(0, x.length / 2); }
+  { const x = t.trim(); const mm = x.match(/^(.{1,80}?)\s+\1$/s); if (mm) t = mm[1]; }
   // collapse immediate duplicate paragraphs / lines ("PING\nPING")
   const out = []; for (const p of t.split(/\n{2,}/)) { if (out.length && out[out.length - 1].trim() === p.trim()) continue; out.push(p); }
   t = out.join('\n\n');
