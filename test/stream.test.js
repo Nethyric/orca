@@ -26,6 +26,14 @@ const expect = { nested: 'Paris.', nested2: 'Paris.', rloop: 'Paris.', loop: 'Th
       if (!ok) fail++;
       console.log(`${ok ? 'PASS' : 'FAIL'} [${sc}] finish=${r.finish} looped=${!!r.looped} content=${JSON.stringify(r.content.slice(0, 40))}`);
     }
+    { // slow node: the first attempt crawls, the client re-issues after ~6 s and the answer comes from the fast retry
+      const t0 = Date.now(); let live = '';
+      const r = await streamOnce({ baseUrl: 'http://127.0.0.1:8791', apiKey: 'x', model: 'slownode', maxTokens: 100, upstream: {} }, [{ role: 'user', content: 'hi' }], (d) => { if (d.type === 'content') live += d.text; if (d.type === 'reset') live = ''; }, null, false, 0.5, 5000);
+      const ms = Date.now() - t0;
+      const ok = r.finish === 'stop' && r.content.startsWith('The fast answer') && r.content.endsWith('word29.') && live === r.content && ms > 6000 && ms < 12000;
+      if (!ok) fail++;
+      console.log(`${ok ? 'PASS' : 'FAIL'} [slownode] finish=${r.finish} ${ms} ms content=${JSON.stringify(r.content.slice(0, 30))}`);
+    }
     { // oversized tool call: cut by the client, salvage keeps complete lines and infers a file name
       const t0 = Date.now();
       const r = await streamOnce({ baseUrl: 'http://127.0.0.1:8791', apiKey: 'x', model: 'bigtool', maxTokens: 100 }, [{ role: 'user', content: 'hi' }], () => {}, undefined, true, 0.5, 5000);

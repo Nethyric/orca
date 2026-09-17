@@ -16,12 +16,17 @@ const scenarios = {
   fakestop: { chunks: ['# Tutorial\n\nIntro paragraph.\n\n```js\n', ...Array.from({ length: 120 }, (_, i) => `const line${i} = doSomethingUseful(${i}); // keeps going\n`), 'const last = '], finish: 'stop' },
   // a real stop with balanced fences must stay a stop
   realstop: { chunks: ['# Tutorial\n\nIntro paragraph.\n\n```js\n', ...Array.from({ length: 120 }, (_, i) => `const line${i} = doSomethingUseful(${i}); // keeps going\n`), '```\n\nDone.'], finish: 'stop' },
+  // first request lands on a crawling node (one short chunk every 400 ms); the client must re-issue and get the fast node
+  slownode: { chunks: ['The fast answer', ...Array.from({ length: 30 }, (_, i) => ` word${i}`), '.'], finish: 'stop', slowFirst: 400 },
   // a runaway write_file whose arguments never end (content first, no path) — the client must cut it and salvage
   bigtool: { tool: 'write_file', argChunks: ['{"content": "# Big Tutorial\\n\\n', ...Array.from({ length: 400 }, (_, i) => `Paragraph ${i} of the tutorial with enough words to make it long and realistic.\\n`)], finish: null, noDone: true },
 };
+const hits = {};
 http.createServer((req, res) => {
   let body = ''; req.on('data', (d) => body += d); req.on('end', () => {
     const j = JSON.parse(body); const sc = scenarios[j.model] || scenarios.length;
+    hits[j.model] = (hits[j.model] || 0) + 1;
+    const gap = sc.slowFirst && hits[j.model] === 1 ? sc.slowFirst : 30;
     res.writeHead(200, { 'content-type': 'text/event-stream' });
     let i = 0;
     const tick = () => {
@@ -30,7 +35,7 @@ http.createServer((req, res) => {
         if (i < sc.argChunks.length) { res.write(`data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: sc.argChunks[i++] } }] }, finish_reason: null }] })}\n\n`); setTimeout(tick, 5); return; }
         return; // never finishes (proxy would cut it after minutes)
       }
-      if (i < sc.chunks.length) { res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: sc.chunks[i++] }, finish_reason: null }] })}\n\n`); setTimeout(tick, 30); }
+      if (i < sc.chunks.length) { res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: sc.chunks[i++] }, finish_reason: null }] })}\n\n`); setTimeout(tick, gap); }
       else { if (sc.finish) res.write(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: sc.finish }], usage: { prompt_tokens: 10, completion_tokens: 20 } })}\n\n`); if (!sc.noDone) res.write('data: [DONE]\n\n'); res.end(); }
     };
     tick();

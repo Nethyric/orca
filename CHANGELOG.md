@@ -17,6 +17,8 @@ All notable changes to ORCA are documented here. The format follows [Keep a Chan
 - Doubled opening words ("Paris.Paris. The capital…"), an answer written twice back-to-back, and process narration ("The user asked… I'll answer concisely") are removed from final answers.
 - Runaway tool calls: when a model streams a huge `write_file` (content first, path last) and the gateway closes the stream after ~300 s, the arguments were unusable and the model retried the same call for 20+ minutes. The stream is now cut client-side at 24 KB, complete lines are saved to the named (or inferred) file, and the model is told to continue with `append`; tool calls are limited to ~5 000 characters each.
 - A gateway time-limit reported as a normal `stop` (long answer ending inside an open code block or mid-sentence after ~5 min) is treated as a cut and continued automatically.
+- Slow pool nodes: about one built-in request in four used to land on a node streaming ~13 tokens/s (a 4k-token answer took 5 minutes). The first seconds of every built-in stream are measured and a crawling request is re-issued once, which almost always lands on a fast node (80–150 tokens/s).
+- A cut `write_file` whose `path` never arrived is saved under the file name the conversation asked for (e.g. "save it as docs/x.md"), and a cut continuation with `append: true` is appended, never overwritten.
 
 ### Added
 - **Pin messages** — pinned messages are re-injected into every following prompt so decisions stay binding.

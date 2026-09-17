@@ -68,7 +68,9 @@ Risk: `none`
 
 ### `write_file`
 
-Create or overwrite a file in the workspace with full content. Parent folders are created automatically. HARD LIMIT: keep each call under ~100 lines / 4 KB (output budget) — for bigger files write the first part, then continue with append=true in further calls, or split the code into several small modules.
+Create or overwrite a file in the workspace with full content. Parent folders are created automatically. HARD LIMIT: keep each call under ~5000 characters (≈100 lines of code, ≈50 lines of prose) — for bigger files write the first part, then continue with append=true in further calls, or split the code into several small modules.
+
+If a model streams a bigger call anyway, ORCA cuts the stream at 24 KB of arguments, saves every complete line it received (to the given path, or — when the model sent `content` before `path` — to a file named after the request or the first heading) and tells the model to continue with `append: true`.
 
 Risk: `low`
 

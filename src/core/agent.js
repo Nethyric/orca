@@ -12,7 +12,8 @@ config.setVaultProbe(() => vault.enabled());
 //   anything else            → itself
 function expand(cfg) {
   if (!vault.isVaultModel(cfg)) return [cfg];
-  return vault.candidates(vault.aliasOf(cfg)).map((u) => ({ ...cfg, baseUrl: String(u.url).replace(/\/+$/, ''), apiKey: u.key, model: u.model, maxTokens: Math.min(cfg.maxTokens || 4096, u.maxTokens || 4096), upstream: u, api: u.api || apiKind(u.url), extraHeaders: u.headers || null }));
+  const cands = vault.candidates(vault.aliasOf(cfg));
+  return cands.map((u) => ({ ...cfg, baseUrl: String(u.url).replace(/\/+$/, ''), apiKey: u.key, model: u.model, maxTokens: Math.min(cfg.maxTokens || 4096, u.maxTokens || 4096), upstream: u, api: u.api || apiKind(u.url), extraHeaders: u.headers || null, poolSize: cands.length }));
 }
 // OpenAI-compatible everywhere except Anthropic's native Messages API
 const apiKind = (url) => (/api\.anthropic\.com/.test(url || '') ? 'anthropic' : 'openai');
@@ -120,7 +121,7 @@ HOW TO WORK
 - Secrets the user pastes (API tokens, keys) go into a config file or .env, never hard-coded into source and never echoed back in full.
 - Build real things end-to-end: create files, run them, read errors, fix, re-run. Never stop at "you could…" when you can do it.
 - THINKING: for greetings, identity/date questions and other simple requests do not deliberate — answer directly (at most 2 short lines of thought). Think longer only for real problems.
-- OUTPUT LIMIT: about 4000 tokens per turn, thinking included. Long answers are fine: ORCA automatically lets you continue where you stopped, so never shorten or summarize because of length — just write; if you are cut off you will be asked to continue seamlessly. Never put more than ~5 000 characters in one tool call (≈100 lines of code, but only ~50 lines of prose — long paragraphs count): write_file the first part, then append=true for the rest. In write_file always send "path" before "content".
+- OUTPUT LIMIT: about 4000 tokens per turn, thinking included. Long answers are fine: ORCA automatically lets you continue where you stopped, so never shorten or summarize because of length — just write; if you are cut off you will be asked to continue seamlessly. Never put more than ~5 000 characters in one tool call (≈100 lines of code, but only ~50 lines of prose — long paragraphs count): write_file the first part, then append=true for the rest. Never embed long text or code inside a run_shell/run_python/run_node command (heredocs, python -c "…") — save it with write_file first, then run the short command.
 - LONG TEXT the user pasted arrives as <attached_text path="…"> with only a preview inline: the full text is already saved in that workspace file. NEVER retype or copy it into a tool call — read it with read_file/grep, or process it with run_python/run_node reading the file. Split code into small modules (e.g. api.js, handlers.js, store.js, main.js), or write the first ~100 lines and continue with write_file(append=true). Keep thinking short when you are about to write code. One giant call gets cut off and wastes minutes.
 - Verify: after writing code run it or test it; after edits re-read if unsure. Own your mistakes and fix them.
 - Stay on task: do exactly what the current message asks; never run unrelated tools (e.g. social_trending or generate_image) unless the user asked for that in this conversation.
@@ -297,10 +298,10 @@ function suspiciousStop(text, elapsedMs) {
 }
 
 // rough token estimate when the provider sends no usage chunk (stream cut) — 1 token ≈ 4 chars of English/code, ≈ 2 chars of Persian/CJK
-function estimateUsage(messages, content, reasoning) {
+function estimateUsage(messages, content, reasoning, toolArgs) {
   const tok = (t) => { t = String(t || ''); const wide = (t.match(/[\u0600-\u06FF\u0400-\u04FF\u4e00-\u9fff\u3040-\u30ff]/g) || []).length; return Math.round((t.length - wide) / 4 + wide / 2); };
   const prompt = messages.reduce((a, m) => a + tok(typeof m.content === 'string' ? m.content : JSON.stringify(m.content || '')) + (m.tool_calls ? tok(JSON.stringify(m.tool_calls)) : 0), 0) + 5000;
-  return { prompt_tokens: prompt, completion_tokens: tok(content) + tok(reasoning), estimated: true };
+  return { prompt_tokens: prompt, completion_tokens: tok(content) + tok(reasoning) + tok(toolArgs), estimated: true };
 }
 const ARG_BYTES_MAX = 24000; // a single tool call's JSON arguments — beyond this the proxy cuts the stream anyway (≈300 s); we cut earlier and salvage
 const MAX_CONTINUATIONS = 8; // ≈ 9 × 4k tokens ≈ 100 KB of answer before we give up stitching
@@ -328,13 +329,13 @@ function joinContinuation(prev, next) {
 const RETRYABLE = new Set([408, 409, 425, 429, 500, 502, 503, 504]);
 
 // ---- streaming call: yields deltas via onDelta({type:'content'|'reasoning', text}) ----
-async function streamOnce(cfg, messages, onDelta, signal, useTools, temperature, connectMs = 25000) {
+async function streamOnce(cfg, messages, onDelta, signal, useTools, temperature, connectMs = 25000, attempt = 0) {
   const body = { model: cfg.model, messages, stream: true, max_tokens: cfg.maxTokens, temperature };
   if (useTools) { body.tools = tools.SCHEMAS; body.tool_choice = 'auto'; }
   // watchdog: abort if the provider stalls (no bytes for STALL_MS) or never answers (CONNECT_MS)
   const ctl = new AbortController();
   const startedAt = Date.now();
-  let stalled = false, looped = false, loopCheckedAt = 0, oversized = false;
+  let stalled = false, looped = false, loopCheckedAt = 0, oversized = false, slow = false, firstAt = 0;
   const calls = new Map(); // tool calls by index (declared here so the catch handlers can salvage partial arguments)
   let drain = () => {}; // assigned below (needs the stream's buffers); the catch handlers call it too
   let content = '', reasoning = '', usage = null;
@@ -432,6 +433,14 @@ async function streamOnce(cfg, messages, onDelta, signal, useTools, temperature,
     if (rc) { reasoning += rc; onDelta({ type: 'reasoning', text: rc }); }
     if (d.content) { pending += d.content; drain(false); }
     const grown = content.length + reasoning.length;
+    // Built-in pool nodes differ a lot: roughly one request in four lands on a node doing ~13 tok/s while the
+    // others do 80-150 tok/s, and a fresh request almost always gets a fast one. Measure the first seconds
+    // and re-issue once instead of crawling through a 4k-token answer for minutes.
+    if (cfg.upstream && attempt === 0 && !slow && (cfg.poolSize == null || cfg.poolSize > 1)) {
+      const got = grown + pending.length + [...calls.values()].reduce((a, c) => a + c.function.arguments.length, 0);
+      if (got && !firstAt) firstAt = Date.now();
+      if (firstAt && Date.now() - firstAt > 6000 && got < 480) { slow = true; ctl.abort(); }
+    }
     if (grown - loopCheckedAt > 400) { loopCheckedAt = grown; if (looksRepetitive(content) || (reasoning.length > 1500 && looksRepetitive(reasoning))) { looped = true; ctl.abort(); } }
     for (const tc of d.tool_calls || []) {
       const idx = tc.index ?? 0;
@@ -462,14 +471,19 @@ async function streamOnce(cfg, messages, onDelta, signal, useTools, temperature,
   if (useTools && !tcs.length) { const pt = parseTextToolCalls(sr.content); if (pt.calls.length) { tcs.push(...pt.calls); sr.content = pt.text; onDelta({ type: 'reset' }); if (sr.reasoning) onDelta({ type: 'reasoning', text: sr.reasoning }); if (sr.content) onDelta({ type: 'content', text: sr.content }); } }
   if (!finish && !sawDone && !tcs.length && sr.content.trim()) finish = 'cut'; // proxy/provider closed the stream early
   if ((finish === 'stop' || !finish) && !tcs.length && suspiciousStop(sr.content, Date.now() - startedAt)) finish = 'cut'; // proxy time limit reported as a normal stop / [DONE] without finish_reason
-  return { content: sr.content, reasoning: sr.reasoning, tool_calls: tcs, usage: usage || estimateUsage(messages, content, reasoning), finish };
+  return { content: sr.content, reasoning: sr.reasoning, tool_calls: tcs, usage: usage || estimateUsage(messages, content, reasoning, [...calls.values()].map((c) => c.function.arguments || '').join('')), finish };
   } catch (e) {
+    if (slow && !(signal && signal.aborted)) {
+      // re-issue once; if the second attempt is rejected (429/5xx), the caller's normal key/model rotation takes over
+      onDelta({ type: 'reset' });
+      return streamOnce(cfg, messages, onDelta, signal, useTools, temperature, connectMs, attempt + 1);
+    }
     if (oversized) {
       // we cut a runaway tool call ourselves: hand the partial arguments to the salvage path (write_file keeps the complete lines)
       drain(true);
       const sr = splitReasoning({ content, reasoning_content: reasoning });
       const tcs = [...calls.values()].filter((c) => c.function.name);
-      return { content: sr.content, reasoning: sr.reasoning, tool_calls: tcs, usage: usage || estimateUsage(messages, content, reasoning), finish: 'length' };
+      return { content: sr.content, reasoning: sr.reasoning, tool_calls: tcs, usage: usage || estimateUsage(messages, content, reasoning, [...calls.values()].map((c) => c.function.arguments || '').join('')), finish: 'length' };
     }
     if (looped) {
       // we aborted a runaway repetition: return the answer up to the point where it started looping
@@ -478,13 +492,13 @@ async function streamOnce(cfg, messages, onDelta, signal, useTools, temperature,
       if (!c.trim()) { const rec = recoverUnterminated(cutRepetition(reasoning)); r = rec.reasoning; c = rec.content.trim(); }
       const sr = splitReasoning({ content: c, reasoning_content: r });
       onDelta({ type: 'reset' }); if (sr.reasoning) onDelta({ type: 'reasoning', text: sr.reasoning }); if (sr.content) onDelta({ type: 'content', text: sr.content });
-      return { content: sr.content, reasoning: sr.reasoning, tool_calls: [], usage: usage || estimateUsage(messages, content, reasoning), finish: 'stop', looped: true };
+      return { content: sr.content, reasoning: sr.reasoning, tool_calls: [], usage: usage || estimateUsage(messages, content, reasoning, [...calls.values()].map((c) => c.function.arguments || '').join('')), finish: 'stop', looped: true };
     }
     if (stalled && !(signal && signal.aborted)) {
       // the provider went silent after streaming a good part of the answer: keep it and let the agent continue it
       drain(true);
       const sr = splitReasoning({ content, reasoning_content: reasoning });
-      if (sr.content.trim().length > 400 && !calls.size) return { content: sr.content, reasoning: sr.reasoning, tool_calls: [], usage: usage || estimateUsage(messages, content, reasoning), finish: 'cut' };
+      if (sr.content.trim().length > 400 && !calls.size) return { content: sr.content, reasoning: sr.reasoning, tool_calls: [], usage: usage || estimateUsage(messages, content, reasoning, [...calls.values()].map((c) => c.function.arguments || '').join('')), finish: 'cut' };
       throw stallErr();
     }
     throw e;
@@ -559,13 +573,26 @@ async function callModelOnce(modelKey, messages, { emit, signal, useTools = true
   const err = new Error(L().allFailed + last.replace(/HTTP (\d+): \{[\s\S]*$/, 'HTTP $1').slice(0, 200)); err.transient = transient; throw err;
 }
 
+// File paths mentioned in the conversation (the user's "save it as docs/x.md", the model's "I'll write src/app.js"),
+// most recent first — used to name a file whose write_file call was cut before its "path" arrived.
+function mentionedPaths(msgs) {
+  const out = [];
+  const rx = /(?:^|[\s`'"(\[])((?:[\w.-]+\/)*[\w.-]+\.(?:md|txt|js|mjs|cjs|ts|tsx|jsx|py|html|css|json|ya?ml|toml|sh|ps1|bat|sql|csv|xml|svg|vue|svelte|go|rs|java|kt|c|cpp|h|cs|php|rb))(?=$|[\s`'"),\]:.!?])/g;
+  for (let i = msgs.length - 1; i >= 1 && out.length < 6; i--) {
+    const m = msgs[i]; if (m.role !== 'user' && m.role !== 'assistant') continue;
+    const text = String(typeof m.content === 'string' ? m.content : '').replace(/<think>[\s\S]*?<\/think>/g, '');
+    for (const mm of text.matchAll(rx)) { const p = mm[1]; if (!/^\d/.test(p) && !out.includes(p) && !/^(package|node_modules|README)\b/i.test(p)) out.push(p); }
+  }
+  return out;
+}
+
 // ---------------- runs ----------------
 const runs = new Map(); // runId -> { abort, approvals: Map<callId,{resolve}>, chatId }
 
 // A provider cut the stream in the middle of tool-call arguments (Dahl caps output at ~4096 tokens per
 // turn, thinking included). Recover whatever complete lines of `content` we can, plus the path if it
 // was emitted before the cut, so the work is not lost.
-function salvageArgs(partial) {
+function salvageArgs(partial, hints = []) {
   const pm = partial.match(/"path"\s*:\s*"((?:[^"\\]|\\.)*)"/);
   let path; try { path = pm ? JSON.parse('"' + pm[1] + '"') : undefined; } catch (_) { path = pm ? pm[1] : undefined; }
   const ci = partial.search(/"content"\s*:\s*"/);
@@ -577,14 +604,18 @@ function salvageArgs(partial) {
   const kept = cut > 0 ? content.slice(0, cut + 1) : '';
   // MiniMax often emits "content" before "path" and the stream is cut before the path ever arrives.
   // Infer a sensible file name from the text so 15 KB of good work is saved instead of thrown away.
-  let inferred = false;
+  let inferred = false, fromHint = false;
   if (!path && kept.length > 200) {
     const head = (kept.match(/^#\s+(.+)$/m) || kept.match(/^\s*(?:\/\/|#|\*|<!--)?\s*([A-Za-z][\w .-]{3,60})/m) || [])[1] || '';
     const slug = head.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
     const ext = /^\s*(<!DOCTYPE|<html)/i.test(kept) ? 'html' : /^\s*(import |export |const |let |function |class |require\()/m.test(kept) && !/^#\s/m.test(kept) ? 'js' : /^\s*(def |import |from \w+ import|class \w+:)/m.test(kept) && !/^#\s/m.test(kept) ? 'py' : 'md';
-    path = (slug || 'untitled-' + Date.now().toString(36)) + '.' + ext; inferred = true;
+    // a file the conversation already named (user: "save it as docs/x.md") wins when its type matches the content
+    const same = (h) => h.toLowerCase().endsWith('.' + ext) || (ext === 'md' && /\.(txt|markdown)$/i.test(h));
+    const hinted = hints.find(same);
+    path = hinted || (slug || 'untitled-' + Date.now().toString(36)) + '.' + ext; inferred = true; fromHint = !!hinted;
   }
-  return { path, content: kept, tail: content.slice(cut + 1), inferred };
+  const append = /"append"\s*:\s*true/.test(partial); // MiniMax sends "append" first, so a cut continuation still appends instead of overwriting
+  return { path, content: kept, tail: content.slice(cut + 1), inferred, fromHint, append };
 }
 
 // A long paste is saved to the workspace by the server; the model gets the file path plus as much of
@@ -742,15 +773,26 @@ async function runAgent(o) {
         if (decision === 'deny_plan') result = { error: 'PLAN MODE is on: write/run tools are disabled for this turn. Stop calling tools now and reply with the numbered plan, ending with "Shall I execute?" in the user\'s language (fa: اجرا کنم؟ / ru: Выполнить? / zh: 要执行吗？). (The user can turn Plan off with the Plan button in the composer.)' };
         else if (decision !== 'allow') result = { error: 'User denied this action.' + (typeof decision === 'string' && decision.startsWith('deny:') ? ' Reason: ' + decision.slice(5) : '') };
         else if (call.broken) {
-          const sv = call.name === 'write_file' ? salvageArgs(call.partial) : {};
-          const limitNote = `HARD LIMIT: about 4000 output tokens per turn (thinking included) ≈ 100 lines of code per tool call.`;
+          const sv = call.name === 'write_file' ? salvageArgs(call.partial, mentionedPaths(msgs)) : {};
+          const limitNote = `HARD LIMIT: one tool call may carry at most ~5000 characters of arguments (~4000 output tokens per turn, thinking included).`;
           if (sv.path && sv.content && sv.content.length > 200) {
-            result = await tools.callTool('write_file', { path: sv.path, content: sv.content });
+            if (sv.inferred && !sv.append) {
+              // The name is a guess, so never destroy existing work: a re-send of the same document (same first line)
+              // may overwrite it; a continuation that forgot append=true is appended; an unrelated file gets -2, -3 …
+              const firstLine = (t) => (String(t || '').split('\n').find((l) => l.trim()) || '').trim();
+              for (let n = 2; n < 20; n++) {
+                const ex = await tools.callTool('read_file', { path: sv.path, offset: 0, limit: 3 });
+                if (ex.error || firstLine(ex.content) === firstLine(sv.content)) break;
+                if (sv.fromHint) { sv.append = true; break; }
+                sv.path = sv.path.replace(/(-\d+)?(\.\w+)$/, `-${n}$2`);
+              }
+            }
+            result = await tools.callTool('write_file', { path: sv.path, content: sv.content, append: sv.append });
             const lines = sv.content.split('\n'); const lastLine = lines[lines.length - 2] || '';
-            result = { ...result, partial: true, lines_written: lines.length - 1, chars_written: sv.content.length, last_line: lastLine, next_step: `Your call was cut off (the stream was closed after ${call.args._partialLength} characters of arguments); the first ${lines.length - 1} complete lines were SAVED to ${sv.path}${sv.inferred ? ' (you had not sent a path yet, so this name was chosen from the heading — rename it with run_shell if you want another name)' : ''}. Do NOT resend them. Continue from the line AFTER: ${JSON.stringify(lastLine.slice(0, 120))} using write_file(path=${JSON.stringify(sv.path)}, append=true) in parts of at most 5000 characters (~60 lines of prose or ~100 lines of code). Always emit "path" before "content".` };
+            result = { ...result, partial: true, lines_written: lines.length - 1, chars_written: sv.content.length, last_line: lastLine, next_step: `Your call was cut off after ${call.args._partialLength} characters of arguments (this model sends "content" before "path", so the path never arrived — that is expected, not your mistake). The first ${lines.length - 1} complete lines were ${sv.append ? 'APPENDED to' : 'SAVED to'} ${JSON.stringify(sv.path)}${sv.inferred ? ' (name taken from the conversation/heading; rename later with run_shell if needed)' : ''}. Do NOT resend them and do NOT start over. Continue from the line AFTER ${JSON.stringify(lastLine.slice(0, 120))} with write_file(path=${JSON.stringify(sv.path)}, append=true, content=<next part>) — each part at most 5000 characters (~60 lines of prose or ~100 lines of code); several small append calls are fine.` };
             emit('files', { tool: 'write_file', files: [sv.path] });
           } else {
-            result = { error: `Your ${call.name} arguments were cut off after ${call.args._partialLength} characters — nothing was executed. ${limitNote} Re-send in parts of at most 5000 characters: write_file(path, part1) then write_file(path, part2, append=true) … Always emit "path" before "content".${sv.content ? ' The cut content began with: ' + JSON.stringify(sv.content.slice(0, 100)) : ''}` };
+            result = { error: `Your ${call.name} arguments were cut off after ${call.args._partialLength} characters — nothing was executed. ${limitNote} ${call.name === 'write_file' ? 'Re-send in parts of at most 5000 characters: write_file(path, part1) then write_file(path, part2, append=true) …' : 'Never embed a large document or script inside a ' + call.name + ' command: save it with write_file in parts of at most 5000 characters (append=true for the following parts), then run the short command that uses the file.'}${sv.content ? ' The cut content began with: ' + JSON.stringify(sv.content.slice(0, 100)) : ''}` };
           }
         }
         else result = await tools.callTool(call.name, call.args);
