@@ -204,6 +204,7 @@ function tidyAnswer(content, reasoning) {
   t = t.replace(TEXT_CALL_RE, '').replace(/<\/?(?:｜DSML｜|\|DSML\|)[\w-]*[^>]*>/g, ''); // stray DSML tool-call markup
   t = t.replace(/<\/?(tool_call|arg_key|arg_value|function|invoke|parameter|tool_response|observation)[^>]*>/g, '');
   t = t.replace(/<\|[a-z_]+\|>/g, ''); // <|im_end|>, <|observation|> …
+  t = t.replace(/<\/?(?:minimax|kimi|glm|deepseek|qwen)?:?tool_calls?[^>]*>/gi, ''); // stray "</minimax:tool_call>" tokens some samplers emit
   if (reasoning) {
     const r = String(reasoning).replace(/\s+/g, ' ').trim();
     if (r.length > 40) {

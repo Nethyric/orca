@@ -55,7 +55,7 @@ marked.setOptions({ gfm: true, breaks: true });
 const mdCache = new Map();
 function md(text, live = false) {
   text = String(text || '');
-  if (live) text = text.replace(/<(?:｜DSML｜|\|DSML\|)[\s\S]*$/, '').replace(/<\/?(?:tool_call|invoke|parameter)[^>]*>/g, ''); // never show half-streamed tool markup
+  if (live) text = text.replace(/<(?:｜DSML｜|\|DSML\|)[\s\S]*$/, '').replace(/<\/?(?:tool_call|invoke|parameter)[^>]*>/g, '').replace(/<\/?(?:minimax|kimi|glm|deepseek|qwen)?:?tool_calls?[^>]*>/gi, ''); // never show half-streamed tool markup
   if (!live && mdCache.has(text)) return mdCache.get(text);
   let html;
   try { html = marked.parse(text); } catch (_) { html = esc(text); }
