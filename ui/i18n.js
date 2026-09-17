@@ -2,6 +2,7 @@
 // Rules: every key exists in `en`; other languages fall back to `en` for anything missing.
 (function () {
   const en = {
+    queued: 'Queued — will be sent when the current answer finishes', remove: 'Remove',
     showMore: 'Show more', showLess: 'Show less',
     web: 'Web', tabNotes: 'Notes', pinnedMsgs: 'Pinned messages', chatNotes: 'Chat notes', notesPh: 'Decisions, terminology, constraints for this chat — the model always sees these.', noPins: 'Pin a message (📌 on hover) and it stays in the model\'s context no matter how long the chat gets.', pin: 'Pin', unpin: 'Unpin', pinnedMsg: 'Pinned — always in context', unpinnedMsg: 'Unpinned', fork: 'Branch', forked: 'Branched into a new chat', delMsg: 'Delete', delMsgQ: 'Delete this message (and its answers)?', continue: 'Continue', retry: 'Retry', stoppedPartial: 'Stopped — the answer is incomplete.', errGeneric: 'The response was interrupted.', continuedNote: 'continued', allBusy: 'All models are busy right now — try again in a moment', netErr: 'No connection to ORCA — check that the app is running', pasteSaved: 'Long text was saved to the workspace so the model can process it with tools.',
     doneInOtherChat: 'Finished a task in another chat', newChat: 'New chat', searchPh: 'Search conversations', leaderboard: 'Leaderboard', memory: 'Memory', settings: 'Settings', modeDirect: 'Chat', modeSide: 'Compare', modeBattle: 'Battle',
@@ -17,6 +18,7 @@
   };
 
   const fa = {
+    queued: 'در صف قرار گرفت — بعد از پایان پاسخ فعلی ارسال می‌شود', remove: 'حذف',
     showMore: 'نمایش بیشتر', showLess: 'نمایش کمتر',
     web: 'وب', tabNotes: 'یادداشت', pinnedMsgs: 'پیام‌های سنجاق‌شده', chatNotes: 'یادداشت‌های این گفتگو', notesPh: 'تصمیم‌ها، اصطلاح‌ها و محدودیت‌های این گفتگو — مدل همیشه این‌ها را می‌بیند.', noPins: 'یک پیام را سنجاق کنید (📌 هنگام هاور) تا هرچقدر هم گفتگو طولانی شود، در حافظهٔ مدل بماند.', pin: 'سنجاق', unpin: 'برداشتن سنجاق', pinnedMsg: 'سنجاق شد — همیشه در حافظهٔ مدل', unpinnedMsg: 'سنجاق برداشته شد', fork: 'شاخه', forked: 'در یک گفتگوی جدید شاخه زده شد', delMsg: 'حذف', delMsgQ: 'این پیام (و پاسخ‌هایش) حذف شود؟', continue: 'ادامه بده', retry: 'دوباره', stoppedPartial: 'متوقف شد — پاسخ ناقص است.', errGeneric: 'پاسخ قطع شد.', continuedNote: 'ادامه داده شد', allBusy: 'همهٔ مدل‌ها الان شلوغ‌اند — چند لحظهٔ دیگر دوباره امتحان کنید', netErr: 'ارتباط با ORCA برقرار نیست — مطمئن شوید برنامه اجراست', pasteSaved: 'متن طولانی در پوشهٔ کاری ذخیره شد تا مدل با ابزارها پردازشش کند.',
     doneInOtherChat: 'کار در گفتگوی دیگر تمام شد', newChat: 'گفتگوی جدید', searchPh: 'جست‌وجو در گفتگوها', leaderboard: 'رتبه‌بندی', memory: 'حافظه', settings: 'تنظیمات', modeDirect: 'گفتگو', modeSide: 'مقایسه', modeBattle: 'نبرد',
@@ -31,6 +33,7 @@
   };
 
   const ru = {
+    queued: 'В очереди — отправится после текущего ответа', remove: 'Убрать',
     showMore: 'Показать всё', showLess: 'Свернуть',
     web: 'Веб', tabNotes: 'Заметки', pinnedMsgs: 'Закреплённые сообщения', chatNotes: 'Заметки чата', notesPh: 'Решения, термины, ограничения этого чата — модель всегда их видит.', noPins: 'Закрепите сообщение (📌 при наведении), и оно останется в контексте модели, каким бы длинным ни стал чат.', pin: 'Закрепить', unpin: 'Открепить', pinnedMsg: 'Закреплено — всегда в контексте', unpinnedMsg: 'Откреплено', fork: 'Ветка', forked: 'Создана ветка в новом чате', delMsg: 'Удалить', delMsgQ: 'Удалить это сообщение (и ответы на него)?', continue: 'Продолжить', retry: 'Повторить', stoppedPartial: 'Остановлено — ответ неполный.', errGeneric: 'Ответ был прерван.', continuedNote: 'продолжено', allBusy: 'Все модели сейчас заняты — попробуйте через минуту', netErr: 'Нет связи с ORCA — проверьте, что приложение запущено', pasteSaved: 'Длинный текст сохранён в рабочую папку, чтобы модель обработала его инструментами.',
     doneInOtherChat: 'Задача в другом чате завершена', newChat: 'Новый чат', searchPh: 'Поиск по чатам', leaderboard: 'Рейтинг', memory: 'Память', settings: 'Настройки', modeDirect: 'Чат', modeSide: 'Сравнение', modeBattle: 'Битва',
@@ -45,6 +48,7 @@
   };
 
   const zh = {
+    queued: '已加入队列——当前回答完成后发送', remove: '移除',
     showMore: '展开全部', showLess: '收起',
     web: '联网', tabNotes: '笔记', pinnedMsgs: '置顶消息', chatNotes: '对话笔记', notesPh: '此对话的决定、术语和约束——模型始终可见。', noPins: '置顶一条消息（悬停时点 📌），无论对话多长它都会留在模型的上下文中。', pin: '置顶', unpin: '取消置顶', pinnedMsg: '已置顶——始终在上下文中', unpinnedMsg: '已取消置顶', fork: '分支', forked: '已分支到新对话', delMsg: '删除', delMsgQ: '删除这条消息（及其回答）？', continue: '继续', retry: '重试', stoppedPartial: '已停止——回答不完整。', errGeneric: '回答被中断。', continuedNote: '已继续', allBusy: '所有模型当前都繁忙——请稍后再试', netErr: '无法连接 ORCA——请确认应用正在运行', pasteSaved: '长文本已保存到工作区，模型可用工具处理。',
     doneInOtherChat: '另一个对话中的任务已完成', newChat: '新对话', searchPh: '搜索对话', leaderboard: '排行榜', memory: '记忆', settings: '设置', modeDirect: '对话', modeSide: '对比', modeBattle: '对战',

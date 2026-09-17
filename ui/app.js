@@ -55,6 +55,7 @@ marked.setOptions({ gfm: true, breaks: true });
 const mdCache = new Map();
 function md(text, live = false) {
   text = String(text || '');
+  if (live) text = text.replace(/<(?:｜DSML｜|\|DSML\|)[\s\S]*$/, '').replace(/<\/?(?:tool_call|invoke|parameter)[^>]*>/g, ''); // never show half-streamed tool markup
   if (!live && mdCache.has(text)) return mdCache.get(text);
   let html;
   try { html = marked.parse(text); } catch (_) { html = esc(text); }
@@ -141,7 +142,7 @@ function setMode(m) { S.mode = m; $$('#mode-seg button').forEach((b) => b.classL
 $$('#mode-seg button').forEach((b) => (b.onclick = () => { if (runningHere()) return toast(t('running'), 'err'); if (S.chat && S.chat.messages.length && S.chat.mode !== b.dataset.mode) newChat(); setMode(b.dataset.mode); }));
 // runs that belong to the chat currently on screen (others keep streaming in the background and are re-rendered when you return)
 const runningHere = () => [...S.lanes.values()].some((L) => L.group && L.group.chatId === S.chat?.id && S.running.has(L.runId));
-function newChat() { S.chat = null; S.regenFrom = null; setBusy(false); refreshPins(); refreshNotes(); $('#messages').innerHTML = ''; $('#welcome').classList.remove('hidden'); $('#tb-title').textContent = ''; $('#tab-timeline').innerHTML = `<div class="empty">${t('emptyTimeline')}</div>`; $('#changes-list').innerHTML = ''; $('#chg-badge').classList.add('hidden'); renderChatList(S.chats); $('#input').focus(); }
+function newChat() { S.chat = null; S.regenFrom = null; S.queue = []; renderQueue(); setBusy(false); refreshPins(); refreshNotes(); $('#messages').innerHTML = ''; $('#welcome').classList.remove('hidden'); $('#tb-title').textContent = ''; $('#tab-timeline').innerHTML = `<div class="empty">${t('emptyTimeline')}</div>`; $('#changes-list').innerHTML = ''; $('#chg-badge').classList.add('hidden'); renderChatList(S.chats); $('#input').focus(); }
 $('#new-chat').onclick = newChat;
 
 async function openChat(id, focusMsg) {
@@ -275,7 +276,7 @@ function fillLane(lane, m) {
   collapseSteps(steps);
   const c = $('.content', lane); c.innerHTML = md(m.content); c.dir = detectDir(m.content); collapseLong(c, m.content);
   if (m.status === 'error' || m.status === 'stopped') { addInterruptedActions(lane, m); if (m.status === 'stopped') $('.meta', lane).textContent = t('stopped'); }
-  if (m.usage) { const u = $('.usage', lane); u.textContent = `${fmtN(m.usage.prompt_tokens)}↑ ${fmtN(m.usage.completion_tokens)}↓`; u.title = `${(m.usage.prompt_tokens || 0).toLocaleString()} input · ${(m.usage.completion_tokens || 0).toLocaleString()} output tokens`; }
+  if (m.usage) { const u = $('.usage', lane); u.textContent = `${fmtN(m.usage.prompt_tokens)}↑ ${fmtN(m.usage.completion_tokens)}↓${m.usage.estimated ? '~' : ''}${m.tookMs ? ' · ' + fmtDur(m.tookMs) : ''}`; u.title = `${(m.usage.prompt_tokens || 0).toLocaleString()} input · ${(m.usage.completion_tokens || 0).toLocaleString()} output tokens`; }
   if (m.status === 'done' && PLAN_RE.test(m.content || '')) addPlanActions(lane);
 }
 const fmtN = (n) => (n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n || 0));
@@ -439,10 +440,21 @@ document.addEventListener('dragleave', () => { if (--dragDepth <= 0) { dragDepth
 document.addEventListener('dragover', (e) => e.preventDefault());
 document.addEventListener('drop', async (e) => { e.preventDefault(); dragDepth = 0; document.body.classList.remove('dragging'); addFiles(e.dataTransfer?.files || []); });
 
+// While the agent is busy in this chat, new messages queue up (shown above the composer) and go out when it finishes.
+S.queue = [];
+function renderQueue() {
+  let box = $('#queue-list'); if (!box) { box = el('div', 'queue-list'); box.id = 'queue-list'; $('#composer-wrap').insertBefore(box, $('#composer')); }
+  box.innerHTML = ''; box.classList.toggle('hidden', !S.queue.length);
+  S.queue.forEach((q, i) => { const it = el('div', 'queued', `${ico('clock')}<span dir="auto">${esc(q.text.slice(0, 140))}</span><button class="qx" data-tip="${t('remove')}">${ico('x')}</button>`); $('.qx', it).onclick = () => { S.queue.splice(i, 1); renderQueue(); }; box.appendChild(it); });
+}
+function flushQueue() { if (!S.queue.length || runningHere()) return; const q = S.queue.shift(); renderQueue(); send(q.text); }
 async function send(textOverride, regenerateFrom) {
   let text = textOverride ?? $('#input').value.trim();
   if (!text && !S.attach.length) return;
-  if (runningHere()) return toast(t('running'), 'err');
+  if (runningHere()) {
+    if (textOverride != null || regenerateFrom || S.attach.length) return toast(t('running'), 'err');
+    S.queue.push({ text }); renderQueue(); $('#input').value = ''; autosize(); toast(t('queued'), 'ok'); return;
+  }
   if (S.attach.some((a) => a.uploading)) return toast(t('uploading'));
   // local slash commands
   const sc = text.match(/^\/(plan|model|export|clear|files|new)\b\s*(.*)$/i);
@@ -531,7 +543,7 @@ function handle(p) {
     case 'approval': showApproval(L, p.runId, d); break;
     case 'checkpoint': addChange(d); break;
     case 'question': showQuestion(L.el, d); break;
-    case 'usage': { const u = $('.usage', L.el); u.textContent = `${fmtN(d.prompt_tokens)}↑ ${fmtN(d.completion_tokens)}↓${d.estimated ? '~' : ''}`; u.title = `${(d.prompt_tokens || 0).toLocaleString()} input · ${(d.completion_tokens || 0).toLocaleString()} output tokens this turn`; break; }
+    case 'usage': { const u = $('.usage', L.el); u.textContent = `${fmtN(d.prompt_tokens)}↑ ${fmtN(d.completion_tokens)}↓${d.estimated ? '~' : ''}${L.t0 ? ' · ' + fmtDur(Date.now() - L.t0) : ''}`; u.title = `${(d.prompt_tokens || 0).toLocaleString()} input · ${(d.completion_tokens || 0).toLocaleString()} output tokens this turn`; break; }
     case 'todos': renderTodos(L.el, d.todos); if (nearBottom()) thread.scrollTop = 1e9; break;
     case 'files': L.outs = [...(L.outs || []), ...(d.files || [])]; renderOutputs(L.el, L.outs); break;
     case 'sub_event': addSubEvent(L.el, d); break;
@@ -559,6 +571,7 @@ async function finishGroup(L) {
   for (const ln of g.lanes) S.lanes.delete(ln.runId);
   loadChats(); refreshChanges(); if ($('#tab-files').classList.contains('active')) loadFiles();
   if (P.sound) beep();
+  setTimeout(flushQueue, 50);
   if (P.notifications && document.hidden && window.Notification && Notification.permission === 'granted') new Notification('ORCA', { body: (fresh[0]?.content || '').slice(0, 120), icon: '/assets/icon512.png' });
 }
 function beep() { try { const ac = new (window.AudioContext || window.webkitAudioContext)(); const o = ac.createOscillator(); const g = ac.createGain(); o.connect(g); g.connect(ac.destination); o.frequency.value = 880; g.gain.setValueAtTime(.08, ac.currentTime); g.gain.exponentialRampToValueAtTime(.0001, ac.currentTime + .25); o.start(); o.stop(ac.currentTime + .25); } catch (_) {} }
@@ -598,6 +611,7 @@ async function loadFiles() {
   }
   if (!(r.entries || []).length) box.innerHTML = '<div class="empty">—</div>';
 }
+const fmtDur = (ms) => (ms < 1000 ? '<1s' : ms < 60000 ? Math.round(ms / 1000) + 's' : Math.floor(ms / 60000) + 'm ' + Math.round((ms % 60000) / 1000) + 's');
 const fmtB = (n) => (n < 1024 ? n + 'B' : n < 1048576 ? (n / 1024).toFixed(1) + 'K' : (n / 1048576).toFixed(1) + 'M');
 $('#refresh-files').onclick = loadFiles;
 $('#open-ws').onclick = () => desktop ? desktop.openPath(S.cfg.workspaceDir) : toast(S.cfg.workspaceDir);

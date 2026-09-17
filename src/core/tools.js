@@ -100,6 +100,14 @@ function runShell({ command, timeout, shell }) {
 }
 
 let pyCache = null, pyCacheAt = 0;
+// "file.js:12\n  foo(\n     ^\n\nSyntaxError: missing ) …" → "line 12: SyntaxError: missing ) …"
+function fmtSyntax(msg) {
+  const m = msg.match(/:(\d+)\r?\n[\s\S]*?\n\r?\n((?:Syntax|Reference|Type)Error[^\n]*)/) || msg.match(/line (\d+)[\s\S]*?((?:Syntax|Indentation|Tab)Error[^\n]*)/);
+  if (m) return `line ${m[1]}: ${m[2].trim()}`;
+  const line = msg.split('\n').map((l) => l.trim()).filter((l) => /Error/.test(l))[0];
+  return (line || msg.trim().split('\n')[0] || 'syntax error').slice(0, 300);
+}
+
 function findPython() {
   if (pyCache !== null && Date.now() - pyCacheAt < (pyCache ? 30 : 5) * 60e3) return pyCache; // re-probe every 30 min (5 min while missing)
   pyCache = '';
@@ -136,6 +144,29 @@ const impl = {
     });
   },
 
+  // After every write/edit of a code file run a syntax check and report it with the result. Catches the
+  // classic "wrote 200 lines with a missing brace, then ran it 3 times" loop before it starts.
+  async _check(f) {
+    const ext = path.extname(f).toLowerCase();
+    try {
+      if (ext === '.json') { try { JSON.parse(fs.readFileSync(f, 'utf8')); return { ok: true }; } catch (e) { return { ok: false, message: e.message.slice(0, 200) }; } }
+      if (['.js', '.mjs', '.cjs'].includes(ext)) {
+        const env = { ...childEnv(), ...(process.versions.electron ? { ELECTRON_RUN_AS_NODE: '1' } : {}) };
+        const opts = { stdio: 'pipe', windowsHide: true, timeout: 10000, env };
+        try { execSync(`"${process.execPath}" --check "${f}"`, opts); return { ok: true }; }
+        catch (e) {
+          const msg = String(e.stderr || e.message || '');
+          if (ext === '.js' && /import statement outside a module|Unexpected token 'export'|Cannot use import|top-level await/i.test(msg)) { // ES module in a .js file → re-check as module
+            try { execSync(`"${process.execPath}" --input-type=module --check`, { ...opts, input: fs.readFileSync(f) }); return { ok: true }; } catch (e2) { return { ok: false, message: fmtSyntax(String(e2.stderr || e2.message || '')) }; }
+          }
+          return { ok: false, message: fmtSyntax(msg) };
+        }
+      }
+      if (ext === '.py') { const py = findPython(); if (!py) return null; try { execSync(`${py} -m py_compile "${f}"`, { stdio: 'pipe', windowsHide: true, timeout: 10000, env: childEnv(), shell: isWin ? 'cmd.exe' : '/bin/sh' }); return { ok: true }; } catch (e) { return { ok: false, message: fmtSyntax(String(e.stderr || e.message || '')) }; } }
+    } catch (_) {}
+    return null;
+  },
+
   async write_file({ path: p, content, append = false }) {
     if (!p) return { error: 'path is required' };
     if (content === undefined || content === null) return { error: 'content is missing (your arguments were cut off). Write the file in smaller parts: first call with the first ~150 lines, then further calls with append=true.' };
@@ -145,7 +176,8 @@ const impl = {
     const before = existed ? fs.readFileSync(f, 'utf8') : null;
     const after = append && existed ? before + content : content;
     fs.writeFileSync(f, after, 'utf8');
-    return { ok: true, path: rel(f), bytes: Buffer.byteLength(after), lines: after.split('\n').length, created: !existed, appended: !!(append && existed), _diff: { path: rel(f), before, after } };
+    const check = await impl._check(f);
+    return { ok: true, path: rel(f), bytes: Buffer.byteLength(after), lines: after.split('\n').length, created: !existed, appended: !!(append && existed), ...(check ? { syntax: check.ok ? 'ok' : 'ERROR: ' + check.message } : {}), _diff: { path: rel(f), before, after } };
   },
 
   async read_file({ path: p, offset = 0, limit = 400 }) {
@@ -173,7 +205,8 @@ const impl = {
     const count = t.split(old).length - 1;
     const after = all ? t.split(old).join(nw) : t.replace(old, () => nw);
     fs.writeFileSync(f, after, 'utf8');
-    return { ok: true, path: rel(f), replaced: all ? count : 1, remaining_occurrences: all ? 0 : count - 1, _diff: { path: rel(f), before: t, after } };
+    const check = await impl._check(f);
+    return { ok: true, path: rel(f), replaced: all ? count : 1, remaining_occurrences: all ? 0 : count - 1, ...(check ? { syntax: check.ok ? 'ok' : 'ERROR: ' + check.message } : {}), _diff: { path: rel(f), before: t, after } };
   },
 
   async delete_file({ path: p }) {
@@ -389,7 +422,7 @@ function riskOf(name, args) {
 }
 
 async function callTool(name, args) {
-  const fn = impl[name];
+  const fn = name.startsWith('_') ? null : impl[name]; // _helpers are not callable by the model
   if (!fn) return { error: `unknown tool ${name}` };
   try { return await fn(args || {}); } catch (e) { return { error: `${e.name}: ${e.message}` }; }
 }

@@ -131,6 +131,7 @@ HOW TO WORK
 - Files the user mentions by absolute path outside the workspace: copy them in with run_shell first (tools only touch the workspace).
 - Destructive/high-impact actions (deleting, force-push, system changes): say why first.
 - Memory: user preferences, names, project facts and decisions → remember. Memory below is already loaded.
+- PROJECT MEMORY (ORCA.md): when a workspace has one, keep it current as you work — append to "Decided" when the user chooses something, to "Inferred" when you assumed, to "Tried and failed" when an approach failed (so it is never retried), and "Current state" at the end of a multi-step job. Before a new task in an existing project, read ORCA.md instead of re-exploring the repository.
 - Multi-step jobs (3+ steps): first call todo_write with the full checklist, then keep statuses current (in_progress → done) as you work; the user watches it live. Big independent sub-problems → task sub-agents in parallel.
 - Images the user attaches are saved under attachments/ and pre-analyzed for you (OCR text${vision ? ' + vision description' : ''} appears inside <attached_image>). Use view_image on any image path/URL to inspect it (question= what to look for). Never claim you cannot see images without trying view_image first; if only OCR is available, say what the OCR read and what could not be determined.
 - Social media: for "download this link" use social_download directly (no research needed). For "trending/explore/popular videos" use social_trending (platform, region, query, download=true, max_download). Instagram Explore/stories/private content need the user's cookies — say so briefly and offer the alternatives instead of failing silently. Report every saved file path.
@@ -175,8 +176,31 @@ function splitReasoning(msg) {
 // Final-answer hygiene for models that leak their template into the text: stray tool-call XML
 // fragments (GLM: "</arg_value></tool_call>"), reasoning echoed verbatim into the content, and
 // the same paragraph repeated back-to-back.
+// Some models (DeepSeek V4 on Dahl) sometimes write their tool calls as XML in the text instead of the
+// tool_calls field: <｜DSML｜invoke name="run_shell"><｜DSML｜parameter name="command" string="true">echo ok</｜DSML｜parameter></｜DSML｜invoke>.
+// Turn those into real tool calls so they are executed (and never shown to the user as gibberish).
+const TEXT_CALL_RE = /<(?:｜DSML｜|\|DSML\||)invoke\s+name="([\w.-]+)"\s*>([\s\S]*?)<\/(?:｜DSML｜|\|DSML\||)invoke>/g;
+function parseTextToolCalls(text) {
+  const out = []; let m; let rest = String(text || '');
+  if (!/invoke\s+name=/.test(rest)) return { calls: out, text: rest };
+  const known = new Set(tools.SCHEMAS.map((s) => s.function.name));
+  while ((m = TEXT_CALL_RE.exec(rest))) {
+    const name = m[1]; if (!known.has(name)) continue;
+    const args = {};
+    for (const pm of m[2].matchAll(/<(?:｜DSML｜|\|DSML\||)parameter\s+name="([\w.-]+)"([^>]*)>([\s\S]*?)<\/(?:｜DSML｜|\|DSML\||)parameter>/g)) {
+      const raw = pm[3]; const isStr = /string="true"/.test(pm[2]);
+      let v = raw; if (!isStr) { try { v = JSON.parse(raw); } catch (_) { v = raw.trim() === 'true' ? true : raw.trim() === 'false' ? false : /^-?\d+(\.\d+)?$/.test(raw.trim()) ? Number(raw) : raw; } }
+      args[pm[1]] = v;
+    }
+    out.push({ id: 'call_txt_' + Math.random().toString(36).slice(2, 10), type: 'function', function: { name, arguments: JSON.stringify(args) } });
+  }
+  if (out.length) rest = rest.replace(TEXT_CALL_RE, '').replace(/<\/?(?:｜DSML｜|\|DSML\||)tool_calls[^>]*>/g, '').trim();
+  return { calls: out, text: rest };
+}
+
 function tidyAnswer(content, reasoning) {
   let t = String(content || '');
+  t = t.replace(TEXT_CALL_RE, '').replace(/<\/?(?:｜DSML｜|\|DSML\|)[\w-]*[^>]*>/g, ''); // stray DSML tool-call markup
   t = t.replace(/<\/?(tool_call|arg_key|arg_value|function|invoke|parameter|tool_response|observation)[^>]*>/g, '');
   t = t.replace(/<\|[a-z_]+\|>/g, ''); // <|im_end|>, <|observation|> …
   if (reasoning) {
@@ -230,6 +254,26 @@ function cutRepetition(text) {
   if (firstSentence && prefix.includes(firstSentence)) return prefix.trim() || copy.trim(); // the loop just echoes what was already said
   let out = prefix + copy; const m = out.match(/^[\s\S]*[.!?؟。\n]/); if (m && m[0].length > out.length * 0.5) out = m[0];
   return out.trim();
+}
+
+// A short answer that is mostly one word/sentence repeated ("Paris.Paris.Paris. responseParis.") is a sampler
+// glitch some free endpoints produce on trivial prompts. We ask the next model instead of showing it.
+function degenerate(text) {
+  const t = String(text || '').trim(); if (!t || t.length > 1500) return false;
+  const words = t.toLowerCase().match(/[\p{L}\p{N}]+/gu) || []; if (words.length < 4) return false;
+  const freq = new Map(); for (const w of words) freq.set(w, (freq.get(w) || 0) + 1);
+  const [top, n] = [...freq.entries()].sort((a, b) => b[1] - a[1])[0];
+  if (n >= 4 && n / words.length >= 0.45 && top.length >= 2 && !/^(ha|he|no|la|na|да|不|哈)$/.test(top)) return true;
+  const sents = t.split(/(?<=[.!?؟。])\s*/).map((x) => x.trim().toLowerCase()).filter(Boolean);
+  let run = 1; for (let i = 1; i < sents.length; i++) { if (sents[i] === sents[i - 1] && sents[i].length > 1) { if (++run >= 3) return true; } else run = 1; }
+  return false;
+}
+// last resort when every model glitched the same way: collapse the repeats
+function collapseRepeats(text) {
+  let t = String(text || '');
+  t = t.replace(/(\S[^\n.!?؟。]{0,60}[.!?؟。]?)(?:\s*(?:response)?\s*\1){2,}/g, '$1');
+  t = t.replace(/\s+response(?=\p{Lu}|\s|$)/gu, ' ').trim();
+  return t.replace(/^(.{1,80}?[.!?؟。])\s*(.{1,80}?)$/s, (m, a, b) => (a.startsWith(b) ? a : m)); // "Paris.Paris" → "Paris."
 }
 
 // rough token estimate when the provider sends no usage chunk (stream cut) — 1 token ≈ 4 chars of English/code, ≈ 2 chars of Persian/CJK
@@ -393,6 +437,7 @@ async function streamOnce(cfg, messages, onDelta, signal, useTools, temperature,
   }
   const sr = splitReasoning({ content, reasoning_content: reasoning });
   const tcs = [...calls.values()].filter((c) => c.function.name);
+  if (useTools && !tcs.length) { const pt = parseTextToolCalls(sr.content); if (pt.calls.length) { tcs.push(...pt.calls); sr.content = pt.text; onDelta({ type: 'reset' }); if (sr.reasoning) onDelta({ type: 'reasoning', text: sr.reasoning }); if (sr.content) onDelta({ type: 'content', text: sr.content }); } }
   if (!finish && !sawDone && !tcs.length && sr.content.trim()) finish = 'cut'; // proxy/provider closed the stream early
   return { content: sr.content, reasoning: sr.reasoning, tool_calls: tcs, usage: usage || estimateUsage(messages, content, reasoning), finish };
   } catch (e) {
@@ -421,7 +466,7 @@ async function streamOnce(cfg, messages, onDelta, signal, useTools, temperature,
 // would rather wait 20-40 s than get "All models failed" and press retry themselves.
 async function callModel(modelKey, messages, opts) {
   const { emit, signal } = opts;
-  const waits = [3000, 5000, 8000, 12000, 15000];
+  const waits = [1500, 2500, 4000, 6000, 8000, 10000, 12000, 15000]; // ≈ 1 min in total; the shared concurrency cap usually clears within seconds
   for (let round = 0; ; round++) {
     try { return await callModelOnce(modelKey, messages, opts); }
     catch (e) {
@@ -435,7 +480,7 @@ async function callModel(modelKey, messages, opts) {
 }
 async function callModelOnce(modelKey, messages, { emit, signal, useTools = true, temperature, allowFallback = true }) {
   const order = allowFallback ? config.fallbackOrder(modelKey) : [modelKey];
-  let last = '', transient = true;
+  let last = '', transient = false, glitched = null, lastWhy = ''; // transient = at least one upstream was merely busy → worth another sweep
   for (let i = 0; i < order.length; i++) {
     const logical = config.resolve(order[i]);
     if (!logical || !logical.apiKey) continue;
@@ -455,6 +500,13 @@ async function callModelOnce(modelKey, messages, { emit, signal, useTools = true
           const res = await streamOnce(cfg, messages, (d) => { emitted = true; emit('delta', d); }, signal, useTools, temperature, i === 0 && u === 0 ? 25000 : 15000);
           // label the answer with the model that actually produced it (a vault alias may fall back to another model)
           const actual = vault.isVaultModel(logical) && u > 0 && cfg.model !== ups[0].model ? (config.allModels().find((m) => vault.isVaultModel(m) && expand(m)[0]?.model === cfg.model)?.label || cfg.label) : cfg.label;
+          if (!res.tool_calls?.length && degenerate(res.content) && order.length > 1) {
+            // glitched sampler → next model; keep this one only if nobody does better
+            if (!glitched) glitched = { ...res, used: order[i], label: actual, content: collapseRepeats(res.content) };
+            if (emitted) emit('delta', { type: 'reset' });
+            emit('status', { text: L().retry(`${cfg.label}: garbled answer`), kind: 'retry' });
+            last = `${cfg.label}: garbled answer`; u = ups.length; break; // skip the other keys of this model: the model is the problem, not the key
+          }
           if (i > 0 || actual !== cfg.label) emit('status', { text: L().fallback(config.resolve(modelKey)?.label || modelKey, actual), kind: 'fallback' });
           return { ...res, used: order[i], label: actual };
         } catch (e) {
@@ -463,8 +515,8 @@ async function callModelOnce(modelKey, messages, { emit, signal, useTools = true
           if (emitted) emit('delta', { type: 'reset' });
           // human status instead of the raw provider JSON ("HTTP 429: {"error":{"code":"model_concurrency"…")
           const why = e.status === 429 ? 'busy' : e.status === 504 ? 'no response' : e.status >= 500 ? 'provider error ' + e.status : e.status === 401 || e.status === 403 ? 'key rejected' : e.status === 402 ? 'out of credit' : String(e.message || '').replace(/^HTTP \d+:\s*/, '').slice(0, 80);
-          emit('status', { text: L().retry(`${cfg.label}: ${why}`), kind: 'retry' });
-          if (!(e.status === 429 || e.status === 503 || e.status === 502 || e.status === 504 || e.status === 500 || /fetch failed|ECONN|ETIMEDOUT|stalled/i.test(e.message || ''))) transient = false;
+          if (lastWhy !== cfg.label + why) { lastWhy = cfg.label + why; emit('status', { text: L().retry(`${cfg.label}: ${why}`), kind: 'retry' }); }
+          if (e.status === 429 || e.status === 503 || e.status === 502 || e.status === 504 || e.status === 500 || /fetch failed|ECONN|ETIMEDOUT|stalled/i.test(e.message || '')) transient = true;
           if (cfg.upstream && (e.status === 401 || e.status === 402 || e.status === 403 || e.status === 429 || e.status >= 500)) { vault.markBad(cfg.upstream, e.status); moveOn = true; break; } // next key
           if (e.status && !RETRYABLE.has(e.status)) { u = ups.length; break; } // hard error → next model
           if (e.status === 504 && a >= 1) break; // stalled twice → move on
@@ -473,6 +525,7 @@ async function callModelOnce(modelKey, messages, { emit, signal, useTools = true
       }
     }
   }
+  if (glitched) { emit('delta', { type: 'reset' }); if (glitched.reasoning) emit('delta', { type: 'reasoning', text: glitched.reasoning }); emit('delta', { type: 'content', text: glitched.content }); return glitched; }
   const err = new Error(L().allFailed + last.replace(/HTTP (\d+): \{[\s\S]*$/, 'HTTP $1').slice(0, 200)); err.transient = transient; throw err;
 }
 
@@ -678,6 +731,7 @@ async function runAgent(o) {
       for (const tm of results) { if (tm) { msgs.push(tm); api.push(tm); } }
       // loop detection: same tool+args failing repeatedly, or the same error text coming back again and again
       let looping = false;
+      for (const c of prepared) { const k = 'ok:' + c.name + ':' + JSON.stringify(c.args).slice(0, 300); const n = (seen.get(k) || 0) + 1; seen.set(k, n); if (n >= 3 && !['todo_read', 'list_files', 'read_file', 'recall'].includes(c.name)) looping = true; } // identical successful call 3× is a loop too
       for (const tm of results) {
         if (!tm) continue;
         let failed = false, errKey = '';

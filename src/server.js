@@ -51,7 +51,7 @@ function startLane({ chatId, runId, lane, modelKey, history, planMode, autonomy,
       if (m) {
         const ev = { event, data: event === 'checkpoint' ? { ...data, before: undefined, after: undefined } : data, ts: Date.now() };
         m.events.push(ev);
-        if (event === 'final') { m.content = data.text; m.model = data.model; m.status = data.question ? 'question' : 'done'; m.usage = data.usage; buffer.content = data.text; }
+        if (event === 'final') { m.content = data.text; m.model = data.model; m.status = data.question ? 'question' : 'done'; m.usage = data.usage; m.tookMs = Date.now() - (msg.ts || Date.now()); buffer.content = data.text; }
         if (event === 'error') { m.status = 'error'; m.content = buffer.content; m.error = data.text; m.partial = !!buffer.content.trim(); }
         if (event === 'stopped') { m.status = 'stopped'; m.content = buffer.content; m.partial = !!buffer.content.trim(); }
         if (event === 'thought_done') m.reasoning = data.text;

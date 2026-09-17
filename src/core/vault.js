@@ -117,8 +117,8 @@ const disabled = new Map(); // upstream id → until (ms)
 function candidates(alias) {
   const v = current(); if (!v) return [];
   const list = (v.upstreams || {})[alias] || [];
-  const live = list.filter((u) => u && u.url && u.key && u.model && !(disabled.get(u.id || u.key) > Date.now()));
-  if (!live.length) return list.slice(); // everything cooled down → try them all anyway
+  const live = list.filter(isLive);
+  if (!live.length) { const alive = list.filter((u) => !isDead(u)); return alive.length ? alive : list.slice(); } // everything is cooling down → try the busy ones again, not the dead ones
   // Load-balance only between keys that serve the SAME model as the alias's primary entry (rotating start
   // point every minute); entries with a different model are pure fallbacks and keep their order.
   const primaryModel = live[0].model;
@@ -126,13 +126,17 @@ function candidates(alias) {
   const start = Math.floor(Date.now() / 60000) % primary.length;
   return [...primary.slice(start), ...primary.slice(0, start), ...rest];
 }
-function liveCount(alias) { const v = current(); if (!v) return 0; return ((v.upstreams || {})[alias] || []).filter((u) => u && u.url && u.key && u.model && !(disabled.get(u.id || u.key) > Date.now())).length; }
+function liveCount(alias) { const v = current(); if (!v) return 0; return ((v.upstreams || {})[alias] || []).filter(isLive).length; }
 function markBad(u, status) {
   const id = u.id || u.key;
   // 401/402/403 = dead or out of credit → rest 6 h; 429 = busy → 20 s; 5xx → 15 s (free pools clear in seconds; a long rest just hides a live key)
-  const ms = [401, 402, 403].includes(status) ? 6 * 3600e3 : status === 429 ? 20e3 : 15e3;
+  const dead = [401, 402, 403].includes(status);
+  const ms = dead ? 6 * 3600e3 : status === 429 ? 8e3 : 10e3;
   disabled.set(id, Date.now() + ms);
+  if (dead && u.key) disabled.set('key:' + u.key, Date.now() + ms); // the same key serves other aliases too — don't probe it again there
 }
+const isDead = (u) => disabled.get('key:' + u.key) > Date.now(); // rejected / out of credit — rests for hours
+const isLive = (u) => u && u.url && u.key && u.model && !(disabled.get(u.id || u.key) > Date.now()) && !isDead(u);
 function isVaultModel(cfg) { return cfg && typeof cfg.model === 'string' && cfg.model.startsWith('orca/'); }
 function aliasOf(cfg) { return cfg.model.slice('orca/'.length); }
 
