@@ -120,7 +120,7 @@ HOW TO WORK
 - Act first, ask only when a wrong guess would be costly. Never open with a questionnaire: pick sensible defaults, state them in one line, and start building; the user can redirect you. If the user answers a question with a bare choice/token/number, that IS the answer — continue immediately. Decompose big goals; call independent tools together in one turn (they run in parallel).
 - Secrets the user pastes (API tokens, keys) go into a config file or .env, never hard-coded into source and never echoed back in full.
 - Build real things end-to-end: create files, run them, read errors, fix, re-run. Never stop at "you could…" when you can do it.
-- THINKING: for greetings, identity/date questions and other simple requests do not deliberate — answer directly (at most 2 short lines of thought). Think longer only for real problems.
+- THINKING: for greetings, identity/date questions and other simple requests do not deliberate — answer directly (at most 2 short lines of thought). Think longer only for real problems. Never run a tool just to echo/print text you could simply write ("reply with X" → write X, no shell); a tool that already succeeded is not re-run "to verify".
 - OUTPUT LIMIT: about 4000 tokens per turn, thinking included. Long answers are fine: ORCA automatically lets you continue where you stopped, so never shorten or summarize because of length — just write; if you are cut off you will be asked to continue seamlessly. Never put more than ~5 000 characters in one tool call (≈100 lines of code, but only ~50 lines of prose — long paragraphs count): write_file the first part, then append=true for the rest. Never embed long text or code inside a run_shell/run_python/run_node command (heredocs, python -c "…") — save it with write_file first, then run the short command.
 - LONG TEXT the user pasted arrives as <attached_text path="…"> with only a preview inline: the full text is already saved in that workspace file. NEVER retype or copy it into a tool call — read it with read_file/grep, or process it with run_python/run_node reading the file. Split code into small modules (e.g. api.js, handlers.js, store.js, main.js), or write the first ~100 lines and continue with write_file(append=true). Keep thinking short when you are about to write code. One giant call gets cut off and wastes minutes.
 - Verify: after writing code run it or test it; after edits re-read if unsure. Own your mistakes and fix them.
@@ -217,6 +217,18 @@ function tidyAnswer(content, reasoning) {
       // reasoning glued to the answer without a blank line: "PING The user asked me…"
       const glued = t.indexOf(String(reasoning).trim().slice(0, 60));
       if (glued > 0 && String(reasoning).trim().length > 60) t = t.slice(0, glued).trim();
+    }
+  }
+  // Process narration that leaked into the answer as a trailing paragraph ("The user's request is simple and clear.
+  // I should reply with… No tools are needed…") — the model talked to itself after answering. Drop such paragraphs
+  // when the answer has real content before them.
+  {
+    const NARR = /^(?:the user(?:'s request| asked| wants| is asking| requested| just wants)|i should (?:reply|answer|respond|just|simply|now)|i(?:'ll| will) (?:now )?(?:reply|answer|respond|stop)|no tools? (?:are|is) (?:needed|required)|this (?:is a |request is )(?:simple|straightforward|direct)|the (?:response|answer) is (?:straightforward|simple|complete))/i;
+    const paras = t.split(/\n{2,}/);
+    if (paras.length > 1) {
+      let end = paras.length;
+      while (end > 1 && (!paras[end - 1].trim() || NARR.test(paras[end - 1].trim()))) end--;
+      if (end < paras.length && paras.slice(0, end).join('').trim()) t = paras.slice(0, end).join('\n\n');
     }
   }
   // a doubled opening ("Paris.Paris. The capital…", "سلام!سلام! …") — some models echo their first token
@@ -829,6 +841,23 @@ async function runAgent(o) {
         const n1 = (seen.get(sig + '|' + errKey) || 0) + 1; seen.set(sig + '|' + errKey, n1);
         const n2 = (seen.get('err:' + errKey) || 0) + 1; seen.set('err:' + errKey, n2);
         if (n1 >= 2 || n2 >= 4) looping = true;
+      }
+      // Identical successful tool calls over and over (echo "OK" ×N, the same read) are a stall, not progress:
+      // the model has its answer and keeps "verifying" it. Finish with the text it already wrote, otherwise
+      // demand a plain-text answer, and after that give up with what we have instead of burning all steps.
+      const countOf = (c) => seen.get('ok:' + c.name + ':' + JSON.stringify(c.args).slice(0, 300)) || 0;
+      const allOk = results.every((tm) => { try { const j = JSON.parse(tm.content); return !j.error && !(j.exit_code && j.exit_code !== 0); } catch (_) { return true; } });
+      const echoLike = (c) => (c.name === 'run_shell' && /^\s*(echo|printf)\b/.test(String(c.args.command || ''))) || (c.name === 'run_node' && /^\s*console\.log\(/.test(String(c.args.code || ''))) || (c.name === 'run_python' && /^\s*print\(/.test(String(c.args.code || '')));
+      const stall = allOk && prepared.length && (prepared.every((c) => echoLike(c) && countOf(c) >= 2) || prepared.every((c) => countOf(c) >= 3));
+      if (res.content.trim()) o._lastSaid = res.content;
+      if (stall) {
+        o._stalls = (o._stalls || 0) + 1;
+        const said = tidyAnswer(o._lastSaid || '', res.reasoning);
+        if (said && (o._stalls >= 2 || prepared.every(echoLike))) { emit('final', { text: said, model: usedLabel, modelKey: res.used, usage: totalUsage }); return { api, checkpoints, text: said, model: usedLabel }; }
+        if (o._stalls >= 3) { const text = said || L().noAnswer; emit('final', { text, model: usedLabel, modelKey: res.used, usage: totalUsage }); return { api, checkpoints, text, model: usedLabel }; }
+        msgs.push({ role: 'user', content: '[system] You have already run that successfully — repeating it changes nothing. Do not call any tool now: reply to the user with the final answer as plain text.' }); api.push(msgs[msgs.length - 1]);
+        emit('status', { text: ({ fa: 'تکرار بی‌نتیجه — درخواست پاسخ نهایی', ru: 'Повтор без результата — запрашиваю ответ', zh: '重复无进展 — 要求给出最终回答' })[config.load().lang] || 'Repeating without progress — asking for the answer', kind: 'retry' });
+        continue;
       }
       if (looping && nudges < 2) {
         nudges++;
