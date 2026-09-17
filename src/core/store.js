@@ -15,7 +15,7 @@ let indexCache = null;
 
 function readChat(id) {
   if (cache.has(id)) return cache.get(id);
-  try { const c = JSON.parse(fs.readFileSync(file(id), 'utf8')); cache.set(id, c); return c; } catch (_) { return null; }
+  try { const c = JSON.parse(fs.readFileSync(file(id), 'utf8')); if (!Array.isArray(c.messages)) c.messages = []; if (!Array.isArray(c.votes)) c.votes = []; cache.set(id, c); return c; } catch (_) { return null; }
 }
 function writeChat(c) {
   c.updatedAt = Date.now();

@@ -247,7 +247,8 @@ async function handleApi(req, res, url) {
       lanes.push(startLane({ chatId, runId, lane: 'b', modelKey: pair[1], history: laneHistory('b'), planMode, autonomy, webMode, notes, pinned }));
     }
     const titleSrc = String(text || '').replace(/<attached_(file|image)[\s\S]*?<\/attached_\1>/g, '').replace(/\n\n<attached_(file|image)[\s\S]*$/, '').trim() || (images.length ? (cfg.lang === 'en' ? 'Image question' : 'سؤال دربارهٔ تصویر') : '');
-    if (!chat.title && titleSrc && !body._hidden) { const fast = config.allModels().find((m) => m.tier === 'fast' && config.resolve(m.key)?.apiKey)?.key || cfg.defaultModel; quick(fast, `Write a 3-6 word title (same language as the message, no quotes, no punctuation) for this chat message:\n\n${titleSrc.slice(0, 500)}`).then((t) => { const tt = (t || '').split('\n')[0].trim().slice(0, 60); if (tt) { store.updateChat(chatId, { title: tt }); broadcast({ event: 'title', chatId, data: { title: tt } }); } }).catch(() => {}); }
+    // title: a few seconds later, so it never competes with the answer for a busy model's concurrency slot
+    if (!chat.title && titleSrc && !body._hidden) setTimeout(() => { const fast = config.allModels().find((m) => m.tier === 'fast' && config.resolve(m.key)?.apiKey)?.key || cfg.defaultModel; quick(fast, `Write a 3-6 word title (same language as the message, no quotes, no punctuation) for this chat message:\n\n${titleSrc.slice(0, 500)}`).then((t) => { const tt = (t || '').split('\n')[0].trim().slice(0, 60); if (tt) { store.updateChat(chatId, { title: tt }); broadcast({ event: 'title', chatId, data: { title: tt } }); } }).catch(() => {}); }, 6000);
     return json(res, 200, { runId, lanes, models: lanes.length === 2 ? store.getChat(chatId).models : [chosen] });
   }
   if (p === '/api/stop' && req.method === 'POST') { let n = 0; for (const id of body.runIds || [body.runId]) if (stopRun(id)) n++; return json(res, 200, { stopped: n }); }

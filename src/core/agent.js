@@ -44,10 +44,10 @@ function memorySnippet() {
 }
 
 const STR = {
-  fa: { vaultDown: 'مدل‌های داخلی در دسترس نیستند (اتصال به GitHub برقرار نشد). کلید خودتان را در تنظیمات اضافه کنید یا بعداً دوباره امتحان کنید.', thinking: (m, s) => `${m} در حال فکر کردن… (مرحلهٔ ${s})`, fallback: (a, b) => `↩︎ ${a} در دسترس نبود — سوییچ به ${b}`, retry: (e) => `⚠ ${e} — تلاش مجدد`, empty: 'پاسخ خالی بود — درخواست پاسخ نهایی', allFailed: 'همهٔ مدل‌ها ناموفق بودند. آخرین خطا: ', cap: '⚠️ به سقف مراحل رسیدم. اگر بخواهید ادامه می‌دهم — بگویید «ادامه بده».', running: (n) => `اجرای ${n} ابزار به‌صورت موازی…`, noAnswer: '(پاسخ خالی)', compacting: 'گفتگو طولانی شد — فشرده‌سازی خودکار تاریخچه…', continuing: 'ادامهٔ پاسخ…' },
-  en: { vaultDown: 'Built-in models unavailable (could not reach GitHub). Add your own key in Settings or try again later.', thinking: (m, s) => `${m} is thinking… (step ${s})`, fallback: (a, b) => `↩︎ ${a} unavailable — switched to ${b}`, retry: (e) => `⚠ ${e} — retrying`, empty: 'Empty answer — requesting final answer', allFailed: 'All models failed. Last error: ', cap: '⚠️ Step limit reached. Say "continue" and I will carry on.', running: (n) => `running ${n} tools in parallel…`, noAnswer: '(empty answer)', compacting: 'Long conversation — auto-compacting history…', continuing: 'continuing…' },
-  ru: { vaultDown: 'Встроенные модели недоступны (нет связи с GitHub). Добавьте свой ключ в настройках или повторите позже.', thinking: (m, s) => `${m} думает… (шаг ${s})`, fallback: (a, b) => `↩︎ ${a} недоступна — переключение на ${b}`, retry: (e) => `⚠ ${e} — повтор`, empty: 'Пустой ответ — запрашиваю финальный ответ', allFailed: 'Все модели недоступны. Последняя ошибка: ', cap: '⚠️ Достигнут лимит шагов. Напишите «продолжай», и я продолжу.', running: (n) => `выполняю ${n} инструментов параллельно…`, noAnswer: '(пустой ответ)', compacting: 'Долгий диалог — автоматическое сжатие истории…', continuing: 'продолжаю…' },
-  zh: { vaultDown: '内置模型不可用（无法连接 GitHub）。请在设置中添加自己的密钥或稍后重试。', thinking: (m, s) => `${m} 正在思考…（第 ${s} 步）`, fallback: (a, b) => `↩︎ ${a} 不可用 — 已切换到 ${b}`, retry: (e) => `⚠ ${e} — 重试中`, empty: '回答为空 — 请求最终回答', allFailed: '所有模型均失败。最后错误：', cap: '⚠️ 已达到步骤上限。说“继续”我会接着做。', running: (n) => `并行运行 ${n} 个工具…`, noAnswer: '（空回答）', compacting: '对话过长 — 自动压缩历史…', continuing: '继续…' },
+  fa: { busyWait: (s) => `همهٔ مدل‌ها شلوغ‌اند — ${s} ثانیهٔ دیگر دوباره تلاش می‌شود`, vaultDown: 'مدل‌های داخلی در دسترس نیستند (اتصال به GitHub برقرار نشد). کلید خودتان را در تنظیمات اضافه کنید یا بعداً دوباره امتحان کنید.', thinking: (m, s) => `${m} در حال فکر کردن… (مرحلهٔ ${s})`, fallback: (a, b) => `↩︎ ${a} در دسترس نبود — سوییچ به ${b}`, retry: (e) => `⚠ ${e} — تلاش مجدد`, empty: 'پاسخ خالی بود — درخواست پاسخ نهایی', allFailed: 'همهٔ مدل‌ها ناموفق بودند. آخرین خطا: ', cap: '⚠️ به سقف مراحل رسیدم. اگر بخواهید ادامه می‌دهم — بگویید «ادامه بده».', running: (n) => `اجرای ${n} ابزار به‌صورت موازی…`, noAnswer: '(پاسخ خالی)', compacting: 'گفتگو طولانی شد — فشرده‌سازی خودکار تاریخچه…', continuing: 'ادامهٔ پاسخ…' },
+  en: { busyWait: (s) => `All models are busy — retrying in ${s} s`, vaultDown: 'Built-in models unavailable (could not reach GitHub). Add your own key in Settings or try again later.', thinking: (m, s) => `${m} is thinking… (step ${s})`, fallback: (a, b) => `↩︎ ${a} unavailable — switched to ${b}`, retry: (e) => `⚠ ${e} — retrying`, empty: 'Empty answer — requesting final answer', allFailed: 'All models failed. Last error: ', cap: '⚠️ Step limit reached. Say "continue" and I will carry on.', running: (n) => `running ${n} tools in parallel…`, noAnswer: '(empty answer)', compacting: 'Long conversation — auto-compacting history…', continuing: 'continuing…' },
+  ru: { busyWait: (s) => `Все модели заняты — повтор через ${s} с`, vaultDown: 'Встроенные модели недоступны (нет связи с GitHub). Добавьте свой ключ в настройках или повторите позже.', thinking: (m, s) => `${m} думает… (шаг ${s})`, fallback: (a, b) => `↩︎ ${a} недоступна — переключение на ${b}`, retry: (e) => `⚠ ${e} — повтор`, empty: 'Пустой ответ — запрашиваю финальный ответ', allFailed: 'Все модели недоступны. Последняя ошибка: ', cap: '⚠️ Достигнут лимит шагов. Напишите «продолжай», и я продолжу.', running: (n) => `выполняю ${n} инструментов параллельно…`, noAnswer: '(пустой ответ)', compacting: 'Долгий диалог — автоматическое сжатие истории…', continuing: 'продолжаю…' },
+  zh: { busyWait: (s) => `所有模型都忙 — ${s} 秒后重试`, vaultDown: '内置模型不可用（无法连接 GitHub）。请在设置中添加自己的密钥或稍后重试。', thinking: (m, s) => `${m} 正在思考…（第 ${s} 步）`, fallback: (a, b) => `↩︎ ${a} 不可用 — 已切换到 ${b}`, retry: (e) => `⚠ ${e} — 重试中`, empty: '回答为空 — 请求最终回答', allFailed: '所有模型均失败。最后错误：', cap: '⚠️ 已达到步骤上限。说“继续”我会接着做。', running: (n) => `并行运行 ${n} 个工具…`, noAnswer: '（空回答）', compacting: '对话过长 — 自动压缩历史…', continuing: '继续…' },
 };
 const L = () => STR[config.load().lang] || STR.en;
 
@@ -135,7 +135,7 @@ HOW TO WORK
 - Images the user attaches are saved under attachments/ and pre-analyzed for you (OCR text${vision ? ' + vision description' : ''} appears inside <attached_image>). Use view_image on any image path/URL to inspect it (question= what to look for). Never claim you cannot see images without trying view_image first; if only OCR is available, say what the OCR read and what could not be determined.
 - Social media: for "download this link" use social_download directly (no research needed). For "trending/explore/popular videos" use social_trending (platform, region, query, download=true, max_download). Instagram Explore/stories/private content need the user's cookies — say so briefly and offer the alternatives instead of failing silently. Report every saved file path.
 - WEB APPS, SITES & GAMES: build them properly, not as demos. Structure: index.html + style.css + main.js (+ modules) unless the user asks for a single file. Include a real layout (header/nav/hero/sections/footer for sites; HUD, menu, pause, game-over, restart, best score for games), responsive CSS, keyboard + touch input, sensible defaults, no external CDNs (offline must work), no placeholder lorem ipsum. After writing, ALWAYS run browser_check on the entry HTML: it loads the page in headless Chrome, reports console errors/uncaught exceptions and takes a screenshot — fix every error and re-check before you answer. If browser_check is unavailable, run a quick node --check on the JS and a static sanity pass (matching braces, referenced ids exist). Tell the user the path and that they can open it from the Files tab.
-- Final answer: concise Markdown in the user's language (default ${lang}); code, commands and paths in English. State what you did, results, file paths. Files you produced (images, videos, docs) → list their paths so the UI can preview them. No tool-output dumps unless asked.${effort}${plan}${web}${persona}${rules}${notes}${pins}${projectMemory()}${memorySnippet()}`;
+- Final answer: concise Markdown in the user's language (default ${lang}); code, commands and paths in English. Write only the answer itself — never narrate your process ("The user asked…", "I'll answer concisely", "Let me…") and never restate the same answer twice. State what you did, results, file paths. Files you produced (images, videos, docs) → list their paths so the UI can preview them. No tool-output dumps unless asked.${effort}${plan}${web}${persona}${rules}${notes}${pins}${projectMemory()}${memorySnippet()}`;
 }
 
 // Recover answer text from an unterminated <think> block. Some servers (vLLM w/ MiniMax) swallow
@@ -194,6 +194,8 @@ function tidyAnswer(content, reasoning) {
       if (glued > 0 && String(reasoning).trim().length > 60) t = t.slice(0, glued).trim();
     }
   }
+  // a doubled opening ("Paris.Paris. The capital…", "سلام!سلام! …") — some models echo their first token
+  t = t.replace(/^([^\n.!?؟。]{1,60}[.!?؟。])\s*\1(?=\s|$)/, '$1');
   // collapse immediate duplicate paragraphs / lines ("PING\nPING")
   const out = []; for (const p of t.split(/\n{2,}/)) { if (out.length && out[out.length - 1].trim() === p.trim()) continue; out.push(p); }
   t = out.join('\n\n');
@@ -202,6 +204,34 @@ function tidyAnswer(content, reasoning) {
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Degenerate repetition guard. Served open models sometimes fall into a loop ("Paris. No further
+// reasoning needed. The capital of France is Paris. Answered directly…" × 100) and only stop at the
+// token cap — minutes of garbage, and a naive auto-continue would extend it. Shingle uniqueness of the
+// tail tells a loop from normal prose/code (which is > 0.8 unique) regardless of the period length.
+function looksRepetitive(text) {
+  const t = String(text || ''); if (t.length < 900) return false;
+  const tail = t.slice(-3000);
+  const lines = tail.split('\n').filter((l) => l.trim());
+  if (lines.length >= 8 && tail.length / lines.length < 60) return false; // dense table/list rows may legitimately repeat — leave those alone
+  const seen = new Set(); let n = 0;
+  for (let i = 0; i + 40 <= tail.length; i++) { seen.add(tail.slice(i, i + 40)); n++; } // every offset: periods of any length count
+  return seen.size / n < 0.35; // normal prose/code is ≈ 1.0; a loop with period P scores ≈ P / 3000
+}
+function cutRepetition(text) {
+  const t = String(text || '');
+  // period P = the smallest block at the end that is immediately preceded by an identical block
+  let P = 0;
+  for (let L = 6; L <= 800 && 2 * L <= t.length; L++) { if (t.slice(-L) === t.slice(-2 * L, -L)) { P = L; break; } }
+  if (!P) return t.trim();
+  let e = t.length; while (e - 2 * P >= 0 && t.slice(e - 2 * P, e - P) === t.slice(e - P, e)) e -= P;
+  const prefix = t.slice(0, e - P), copy = t.slice(e - P, e); // prefix + first copy of the loop
+  const firstSentence = ((copy.match(/^\s*[^.!?؟。\n]*[.!?؟。\n]/) || [copy])[0]).trim();
+  if (firstSentence && prefix.includes(firstSentence)) return prefix.trim() || copy.trim(); // the loop just echoes what was already said
+  let out = prefix + copy; const m = out.match(/^[\s\S]*[.!?؟。\n]/); if (m && m[0].length > out.length * 0.5) out = m[0];
+  return out.trim();
+}
+
 // rough token estimate when the provider sends no usage chunk (stream cut) — 1 token ≈ 4 chars of English/code, ≈ 2 chars of Persian/CJK
 function estimateUsage(messages, content, reasoning) {
   const tok = (t) => { t = String(t || ''); const wide = (t.match(/[\u0600-\u06FF\u0400-\u04FF\u4e00-\u9fff\u3040-\u30ff]/g) || []).length; return Math.round((t.length - wide) / 4 + wide / 2); };
@@ -233,15 +263,17 @@ function joinContinuation(prev, next) {
 const RETRYABLE = new Set([408, 409, 425, 429, 500, 502, 503, 504]);
 
 // ---- streaming call: yields deltas via onDelta({type:'content'|'reasoning', text}) ----
-async function streamOnce(cfg, messages, onDelta, signal, useTools, temperature) {
+async function streamOnce(cfg, messages, onDelta, signal, useTools, temperature, connectMs = 25000) {
   const body = { model: cfg.model, messages, stream: true, max_tokens: cfg.maxTokens, temperature };
   if (useTools) { body.tools = tools.SCHEMAS; body.tool_choice = 'auto'; }
   // watchdog: abort if the provider stalls (no bytes for STALL_MS) or never answers (CONNECT_MS)
   const ctl = new AbortController();
-  let stalled = false;
+  let stalled = false, looped = false, loopCheckedAt = 0;
+  let drain = () => {}; // assigned below (needs the stream's buffers); the catch handlers call it too
+  let content = '', reasoning = '', usage = null;
   const onAbort = () => ctl.abort();
   if (signal) { if (signal.aborted) throw new Error('aborted'); signal.addEventListener('abort', onAbort, { once: true }); }
-  let timer = setTimeout(() => { stalled = true; ctl.abort(); }, 45000);
+  let timer = setTimeout(() => { stalled = true; ctl.abort(); }, connectMs);
   const kick = (ms) => { clearTimeout(timer); timer = setTimeout(() => { stalled = true; ctl.abort(); }, ms); };
   const stallErr = () => { const e = new Error('provider stalled (no data for a while)'); e.status = 504; return e; };
   try {
@@ -265,21 +297,30 @@ async function streamOnce(cfg, messages, onDelta, signal, useTools, temperature)
   const reader = r.body.getReader();
   const dec = new TextDecoder();
   let finish = '', sawDone = false;
-  let buf = '', content = '', reasoning = '', usage = null, inThink = false, pending = '';
+  let buf = '', inThink = false, pending = '';
   const calls = new Map();
   // Tag-safe splitter: <think>…</think> goes to reasoning, everything else to content.
   // Tags may arrive split across chunks ("<thi" + "nk>"), so hold back a partial-tag tail.
   let softClosed = false, softMark = 0; // we guessed the end of an unterminated <think> at a "\n\n\n" gap
-  const drain = (final) => {
+  drain = (final) => {
     while (pending.length) {
       let tag = inThink ? '</think>' : '<think>';
       let i = pending.indexOf(tag);
       if (softClosed && !inThink) { const j = pending.indexOf('</think>'); if (j !== -1 && (i === -1 || j < i)) { tag = '</think>'; i = j; } }
-      if (inThink && i === -1) {
+      const reopen = inThink ? pending.indexOf('<think>') : -1;
+      if (inThink && (i === -1 || (reopen !== -1 && reopen < i))) {
         // No closing tag yet. Some servers drop </think>; the answer then follows a blank-line gap ("\n\n\n").
         // Hold the text after such a gap until we can tell whether it looks like an answer, then show it as content.
+        if (reopen !== -1) {
+          // a second <think> opens before the first closed: whatever followed the last blank-line gap was the answer
+          const before = pending.slice(0, reopen); const all = reasoning + before; const g = all.lastIndexOf('\n\n\n');
+          const ans = g !== -1 ? all.slice(g + 3) : '';
+          if (ans.trim() && ans.length < 3000) { reasoning = all.slice(0, g); content += ans; onDelta({ type: 'reset' }); if (reasoning) onDelta({ type: 'reasoning', text: reasoning }); if (content) onDelta({ type: 'content', text: content }); }
+          else if (before) { reasoning += before; onDelta({ type: 'reasoning', text: before }); }
+          pending = pending.slice(reopen + 7); continue; // still inThink
+        }
         const gap = pending.indexOf('\n\n\n');
-        if (gap !== -1 && reasoning.length + gap > 80) {
+        if (gap !== -1 && reasoning.length + gap > 30) {
           const after = pending.slice(gap + 3);
           if (after.length < 24 && !final) { const seg = pending.slice(0, gap); if (seg) { reasoning += seg; onDelta({ type: 'reasoning', text: seg }); } pending = pending.slice(gap); break; }
           if (/^\s*(#{1,6}\s|```|\*\*|[-*]\s|\d+[.)]\s|[\u0600-\u06FF\u0400-\u04FF\u4e00-\u9fff]|[A-Z][a-z]+[^\n]{0,80}[.:!]\s)/.test(after) || (final && after.trim().length > 40)) {
@@ -324,6 +365,8 @@ async function streamOnce(cfg, messages, onDelta, signal, useTools, temperature)
     const rc = d.reasoning_content || d.reasoning;
     if (rc) { reasoning += rc; onDelta({ type: 'reasoning', text: rc }); }
     if (d.content) { pending += d.content; drain(false); }
+    const grown = content.length + reasoning.length;
+    if (grown - loopCheckedAt > 400) { loopCheckedAt = grown; if (looksRepetitive(content) || (reasoning.length > 1500 && looksRepetitive(reasoning))) { looped = true; ctl.abort(); } }
     for (const tc of d.tool_calls || []) {
       const idx = tc.index ?? 0;
       if (!calls.has(idx)) calls.set(idx, { id: tc.id || ('call_' + idx + '_' + Date.now().toString(36)), type: 'function', function: { name: '', arguments: '' } });
@@ -353,6 +396,15 @@ async function streamOnce(cfg, messages, onDelta, signal, useTools, temperature)
   if (!finish && !sawDone && !tcs.length && sr.content.trim()) finish = 'cut'; // proxy/provider closed the stream early
   return { content: sr.content, reasoning: sr.reasoning, tool_calls: tcs, usage: usage || estimateUsage(messages, content, reasoning), finish };
   } catch (e) {
+    if (looped) {
+      // we aborted a runaway repetition: return the answer up to the point where it started looping
+      drain(true);
+      let c = cutRepetition(content), r = reasoning;
+      if (!c.trim()) { const rec = recoverUnterminated(cutRepetition(reasoning)); r = rec.reasoning; c = rec.content.trim(); }
+      const sr = splitReasoning({ content: c, reasoning_content: r });
+      onDelta({ type: 'reset' }); if (sr.reasoning) onDelta({ type: 'reasoning', text: sr.reasoning }); if (sr.content) onDelta({ type: 'content', text: sr.content });
+      return { content: sr.content, reasoning: sr.reasoning, tool_calls: [], usage: usage || estimateUsage(messages, content, reasoning), finish: 'stop', looped: true };
+    }
     if (stalled && !(signal && signal.aborted)) {
       // the provider went silent after streaming a good part of the answer: keep it and let the agent continue it
       drain(true);
@@ -364,9 +416,26 @@ async function streamOnce(cfg, messages, onDelta, signal, useTools, temperature)
   } finally { clearTimeout(timer); if (signal) signal.removeEventListener('abort', onAbort); }
 }
 
-async function callModel(modelKey, messages, { emit, signal, useTools = true, temperature, allowFallback = true }) {
+// Free upstreams get busy in bursts (429 model_concurrency / 503). One sweep over all keys takes ~2 s; when
+// every one of them is busy we wait a little and sweep again instead of failing the whole turn — users
+// would rather wait 20-40 s than get "All models failed" and press retry themselves.
+async function callModel(modelKey, messages, opts) {
+  const { emit, signal } = opts;
+  const waits = [3000, 5000, 8000, 12000, 15000];
+  for (let round = 0; ; round++) {
+    try { return await callModelOnce(modelKey, messages, opts); }
+    catch (e) {
+      if (signal?.aborted || !e.transient || round >= waits.length) throw e;
+      const ms = waits[round];
+      emit('status', { text: L().busyWait ? L().busyWait(Math.round(ms / 1000)) : `All models are busy — retrying in ${Math.round(ms / 1000)} s`, kind: 'retry' });
+      await new Promise((res) => { const t = setTimeout(res, ms); signal?.addEventListener('abort', () => { clearTimeout(t); res(); }, { once: true }); });
+      if (signal?.aborted) throw new Error('aborted');
+    }
+  }
+}
+async function callModelOnce(modelKey, messages, { emit, signal, useTools = true, temperature, allowFallback = true }) {
   const order = allowFallback ? config.fallbackOrder(modelKey) : [modelKey];
-  let last = '';
+  let last = '', transient = true;
   for (let i = 0; i < order.length; i++) {
     const logical = config.resolve(order[i]);
     if (!logical || !logical.apiKey) continue;
@@ -377,13 +446,13 @@ async function callModel(modelKey, messages, { emit, signal, useTools = true, te
     if (vault.isVaultModel(logical) && vault.liveCount(vault.aliasOf(logical)) === 0 && order.slice(i + 1).some((k) => { const l = config.resolve(k); return l && l.apiKey && (!vault.isVaultModel(l) || vault.liveCount(vault.aliasOf(l)) > 0); })) { last = `${logical.label}: busy`; continue; }
     for (let u = 0; u < ups.length; u++) {
       const cfg = ups[u];
-      const tries = i === 0 && u === 0 ? 3 : 2;
+      const tries = i === 0 && u === 0 ? 2 : 1; // a busy key answers 429 instantly; spend the time on the next key/model instead of waiting
       let moveOn = false;
       for (let a = 0; a < tries && !moveOn; a++) {
         if (signal?.aborted) throw new Error('aborted');
         let emitted = false;
         try {
-          const res = await streamOnce(cfg, messages, (d) => { emitted = true; emit('delta', d); }, signal, useTools, temperature);
+          const res = await streamOnce(cfg, messages, (d) => { emitted = true; emit('delta', d); }, signal, useTools, temperature, i === 0 && u === 0 ? 25000 : 15000);
           // label the answer with the model that actually produced it (a vault alias may fall back to another model)
           const actual = vault.isVaultModel(logical) && u > 0 && cfg.model !== ups[0].model ? (config.allModels().find((m) => vault.isVaultModel(m) && expand(m)[0]?.model === cfg.model)?.label || cfg.label) : cfg.label;
           if (i > 0 || actual !== cfg.label) emit('status', { text: L().fallback(config.resolve(modelKey)?.label || modelKey, actual), kind: 'fallback' });
@@ -392,16 +461,19 @@ async function callModel(modelKey, messages, { emit, signal, useTools = true, te
           if (signal?.aborted || e.name === 'AbortError') throw new Error('aborted');
           last = `${cfg.label}: ${e.message}`;
           if (emitted) emit('delta', { type: 'reset' });
-          emit('status', { text: L().retry(last.slice(0, 160)), kind: 'retry' });
+          // human status instead of the raw provider JSON ("HTTP 429: {"error":{"code":"model_concurrency"…")
+          const why = e.status === 429 ? 'busy' : e.status === 504 ? 'no response' : e.status >= 500 ? 'provider error ' + e.status : e.status === 401 || e.status === 403 ? 'key rejected' : e.status === 402 ? 'out of credit' : String(e.message || '').replace(/^HTTP \d+:\s*/, '').slice(0, 80);
+          emit('status', { text: L().retry(`${cfg.label}: ${why}`), kind: 'retry' });
+          if (!(e.status === 429 || e.status === 503 || e.status === 502 || e.status === 504 || e.status === 500 || /fetch failed|ECONN|ETIMEDOUT|stalled/i.test(e.message || ''))) transient = false;
           if (cfg.upstream && (e.status === 401 || e.status === 402 || e.status === 403 || e.status === 429 || e.status >= 500)) { vault.markBad(cfg.upstream, e.status); moveOn = true; break; } // next key
           if (e.status && !RETRYABLE.has(e.status)) { u = ups.length; break; } // hard error → next model
           if (e.status === 504 && a >= 1) break; // stalled twice → move on
-          await sleep(Math.min(1000 * Math.pow(2, a), 6000));
+          await sleep(Math.min(600 * Math.pow(2, a), 2500));
         }
       }
     }
   }
-  throw new Error(L().allFailed + last);
+  const err = new Error(L().allFailed + last.replace(/HTTP (\d+): \{[\s\S]*$/, 'HTTP $1').slice(0, 200)); err.transient = transient; throw err;
 }
 
 // ---------------- runs ----------------
@@ -505,7 +577,7 @@ async function runAgent(o) {
       }
       msgs.push(entry); api.push(entry);
 
-      if (!res.tool_calls.length && (res.finish === 'length' || res.finish === 'cut') && continuations < MAX_CONTINUATIONS && res.content.trim() && step < maxSteps - 1) {
+      if (!res.tool_calls.length && (res.finish === 'length' || res.finish === 'cut') && continuations < MAX_CONTINUATIONS && res.content.trim() && step < maxSteps - 1 && !looksRepetitive(res.content)) {
         // The provider capped the output mid-answer. Ask for the rest and stitch the chunks together —
         // the user just sees one answer that keeps streaming.
         continuations++;

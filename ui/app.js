@@ -53,9 +53,9 @@ applyPrefs();
 // ───────────────────────── markdown ─────────────────────────
 marked.setOptions({ gfm: true, breaks: true });
 const mdCache = new Map();
-function md(text) {
+function md(text, live = false) {
   text = String(text || '');
-  if (mdCache.has(text)) return mdCache.get(text);
+  if (!live && mdCache.has(text)) return mdCache.get(text);
   let html;
   try { html = marked.parse(text); } catch (_) { html = esc(text); }
   html = DOMPurify.sanitize(html, { ADD_ATTR: ['target'] });
@@ -63,7 +63,7 @@ function md(text) {
   $$('pre', box).forEach((pre) => {
     const code = $('code', pre); if (!code) return;
     const langName = (code.className.match(/language-([\w+-]+)/) || [])[1] || '';
-    try { if (code.textContent.length < 30000) hljs.highlightElement(code); } catch (_) {}
+    try { if (!live && code.textContent.length < 30000) hljs.highlightElement(code); } catch (_) {} // highlight once, when the answer is final
     const head = el('div', 'pre-head', `<span>${esc(langName || 'text')}</span><span class="ph-btns"><button class="ph-open" title="${t('openInPanel')}">${ico('panel-r')}</button><button class="ph-dl" title="${t('download')}">${ico('download')}</button><button class="ph-copy">${ico('copy')}<span>${t('copy')}</span></button></span>`);
     $('.ph-copy', head).onclick = (e) => { e.stopPropagation(); navigator.clipboard.writeText(code.textContent); const s = $('span', e.currentTarget); s.textContent = t('copied'); setTimeout(() => (s.textContent = t('copy')), 1200); };
     $('.ph-dl', head).onclick = (e) => { e.stopPropagation(); const ext = { javascript: 'js', typescript: 'ts', python: 'py', html: 'html', css: 'css', json: 'json', bash: 'sh', shell: 'sh', markdown: 'md' }[langName] || langName || 'txt'; dl('snippet.' + ext, code.textContent); };
@@ -72,8 +72,7 @@ function md(text) {
   });
   $$('a', box).forEach((a) => { a.target = '_blank'; a.rel = 'noopener'; if (/^\[?\d{1,2}\]?$/.test(a.textContent.trim())) { a.classList.add('cite'); a.textContent = a.textContent.replace(/[\[\]]/g, ''); a.title = a.href; } });
   const out = box.innerHTML;
-  if (mdCache.size > 300) mdCache.clear();
-  if (text.length < 30000) mdCache.set(text, out);
+  if (!live) { if (mdCache.size > 300) mdCache.clear(); if (text.length < 30000) mdCache.set(text, out); }
   return out;
 }
 const dl = (name, text) => { if (desktop) return desktop.saveFile(name, text); const a = el('a'); a.href = URL.createObjectURL(new Blob([text], { type: 'text/plain' })); a.download = name; a.click(); };
@@ -218,9 +217,17 @@ function laneEl(m, anon, idx) {
   $('.cp', lane).onclick = () => { navigator.clipboard.writeText(L_text(lane)); toast(t('copied'), 'ok'); };
   $('.pn', lane).onclick = () => togglePinMsg(m);
   $('.fk', lane).onclick = () => forkChat(m.id);
-  $('.rg', lane).onclick = () => { const um = [...S.chat.messages].reverse().find((x) => x.role === 'user' && x.ts <= (m.ts || Infinity)); if (um) send(um.content, um.id); };
+  $('.rg', lane).onclick = () => { const um = [...S.chat.messages].reverse().find((x) => x.role === 'user' && !x.hidden && x.ts <= (m.ts || Infinity)); if (um) send(um.content, um.id); };
   $('.ex', lane).onclick = () => dl('orca-answer.md', L_text(lane));
   return lane;
+}
+// answers longer than ~12k characters are folded to a preview with a "Show more" bar (the full text is still there for copy/export/search)
+function collapseLong(c, text) {
+  if (String(text || '').length < 12000 || c.dataset.folded) return;
+  c.dataset.folded = '1'; c.classList.add('folded');
+  const bar = el('button', 'show-more', ico('chev') + `<span>${t('showMore')} · ${fmtB(String(text).length)}</span>`);
+  bar.onclick = () => { const open = c.classList.toggle('folded'); $('span', bar).textContent = (open ? t('showMore') : t('showLess')) + (open ? ' · ' + fmtB(String(text).length) : ''); if (!open) return; c.scrollIntoView({ block: 'start', behavior: 'smooth' }); };
+  c.after(bar);
 }
 // plain text of an answer for copy/export: the markdown source when we have it, else the rendered text
 const L_text = (lane) => { const m = S.chat && S.chat.messages.find((x) => x.id === lane.dataset.mid); return (m && m.content) || $('.content', lane).textContent; };
@@ -266,9 +273,9 @@ function fillLane(lane, m) {
   if (lastTodos) renderTodos(lane, lastTodos);
   if (outs.length) renderOutputs(lane, outs);
   collapseSteps(steps);
-  const c = $('.content', lane); c.innerHTML = md(m.content); c.dir = detectDir(m.content);
+  const c = $('.content', lane); c.innerHTML = md(m.content); c.dir = detectDir(m.content); collapseLong(c, m.content);
   if (m.status === 'error' || m.status === 'stopped') { addInterruptedActions(lane, m); if (m.status === 'stopped') $('.meta', lane).textContent = t('stopped'); }
-  if (m.usage) $('.usage', lane).textContent = `${fmtN(m.usage.prompt_tokens)}↑ ${fmtN(m.usage.completion_tokens)}↓`;
+  if (m.usage) { const u = $('.usage', lane); u.textContent = `${fmtN(m.usage.prompt_tokens)}↑ ${fmtN(m.usage.completion_tokens)}↓`; u.title = `${(m.usage.prompt_tokens || 0).toLocaleString()} input · ${(m.usage.completion_tokens || 0).toLocaleString()} output tokens`; }
   if (m.status === 'done' && PLAN_RE.test(m.content || '')) addPlanActions(lane);
 }
 const fmtN = (n) => (n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n || 0));
@@ -340,7 +347,7 @@ function addPlanActions(lane) {
 function renderGroup(group, chat) {
   const wrap = el('div', 'msg assistant');
   const lanes = el('div', 'lanes' + (group.length === 2 ? ' two' : '')); wrap.appendChild(lanes);
-  const vote = chat.votes.find((v) => v.runId === group[0].runId);
+  const vote = (chat.votes || []).find((v) => v.runId === group[0].runId);
   const anon = chat.mode === 'battle' && !vote;
   group.forEach((m, i) => { const l = laneEl(m, anon, i); fillLane(l, m); lanes.appendChild(l); });
   if (group.length === 2) wrap.appendChild(voteBar(group, vote));
@@ -486,7 +493,7 @@ const nearBottom = () => thread.scrollHeight - thread.scrollTop - thread.clientH
 thread.addEventListener('scroll', () => { $('#jump-bottom').classList.toggle('hidden', nearBottom()); }, { passive: true });
 $('#jump-bottom').onclick = () => { thread.scrollTo({ top: 1e9, behavior: 'smooth' }); };
 let renderTimer = null; const dirty = new Set();
-function scheduleRender(L) { dirty.add(L); if (renderTimer) return; renderTimer = setTimeout(() => { renderTimer = null; const stick = nearBottom(); for (const L of dirty) { const c = $('.content', L.el); c.innerHTML = md(L.content); c.dir = detectDir(L.content); if (L.reasoning) { const th = $('.thought', L.el); th.classList.remove('hidden'); th.classList.add('live'); if (P.showReasoning && !th.dataset.touched) th.open = true; const b = $('.th-body', th); b.textContent = L.reasoning; b.scrollTop = 1e9; $('.th-time', th).textContent = ((Date.now() - L.t0) / 1000).toFixed(0) + 's'; } } dirty.clear(); if (stick) thread.scrollTop = 1e9; }, 70); }
+function scheduleRender(L) { dirty.add(L); if (renderTimer) return; const longest = Math.max(...[...dirty].map((x) => x.content.length)); const every = longest > 40000 ? 400 : longest > 12000 ? 200 : longest > 4000 ? 120 : 70; renderTimer = setTimeout(() => { renderTimer = null; const stick = nearBottom(); for (const L of dirty) { const c = $('.content', L.el); c.innerHTML = md(L.content, true); c.dir = detectDir(L.content); if (L.reasoning) { const th = $('.thought', L.el); th.classList.remove('hidden'); th.classList.add('live'); if (P.showReasoning && !th.dataset.touched) th.open = true; const b = $('.th-body', th); b.textContent = L.reasoning; b.scrollTop = 1e9; $('.th-time', th).textContent = ((Date.now() - L.t0) / 1000).toFixed(0) + 's'; } } dirty.clear(); if (stick) thread.scrollTop = 1e9; }, every); }
 document.addEventListener('toggle', (e) => { if (e.target.classList?.contains('thought')) e.target.dataset.touched = '1'; }, true);
 
 function updBanner(d) {
@@ -524,13 +531,13 @@ function handle(p) {
     case 'approval': showApproval(L, p.runId, d); break;
     case 'checkpoint': addChange(d); break;
     case 'question': showQuestion(L.el, d); break;
-    case 'usage': $('.usage', L.el).textContent = `${fmtN(d.prompt_tokens)}↑ ${fmtN(d.completion_tokens)}↓`; break;
+    case 'usage': { const u = $('.usage', L.el); u.textContent = `${fmtN(d.prompt_tokens)}↑ ${fmtN(d.completion_tokens)}↓${d.estimated ? '~' : ''}`; u.title = `${(d.prompt_tokens || 0).toLocaleString()} input · ${(d.completion_tokens || 0).toLocaleString()} output tokens this turn`; break; }
     case 'todos': renderTodos(L.el, d.todos); if (nearBottom()) thread.scrollTop = 1e9; break;
     case 'files': L.outs = [...(L.outs || []), ...(d.files || [])]; renderOutputs(L.el, L.outs); break;
     case 'sub_event': addSubEvent(L.el, d); break;
     case 'compacted': toast(t('compacted'), 'ok'); break;
-    case 'final': { L.content = d.text; const c = $('.content', L.el); c.innerHTML = md(d.text); c.dir = detectDir(d.text); c.classList.remove('streaming'); L.el.classList.remove('streaming'); const th = $('.thought', L.el); th.classList.remove('live'); th.open = false; if (!L.anon) $('.mname', L.el).innerHTML = `<img class="avatar" src="/assets/logo.png" alt="">${esc(d.model)}`; L.m.status = d.question ? 'question' : 'done'; L.m.model = d.model; if (PLAN_RE.test(d.text)) addPlanActions(L.el); $('.meta', L.el).textContent = ((Date.now() - L.t0) / 1000).toFixed(1) + 's'; break; }
-    case 'error': { L.el.classList.add('error'); L.m.status = 'error'; L.m.error = d.text; L.m.content = L.content; if (/429|concurrency|rate/i.test(d.text)) toast(t('busyRetry'), 'err'); addInterruptedActions(L.el, L.m); break; }
+    case 'final': { L.content = d.text; const c = $('.content', L.el); c.innerHTML = md(d.text); c.dir = detectDir(d.text); c.classList.remove('streaming'); L.el.classList.remove('streaming'); collapseLong(c, d.text); const th = $('.thought', L.el); th.classList.remove('live'); th.open = false; if (!L.anon) $('.mname', L.el).innerHTML = `<img class="avatar" src="/assets/logo.png" alt="">${esc(d.model)}`; L.m.status = d.question ? 'question' : 'done'; L.m.model = d.model; if (PLAN_RE.test(d.text)) addPlanActions(L.el); $('.meta', L.el).textContent = ((Date.now() - L.t0) / 1000).toFixed(1) + 's'; break; }
+    case 'error': { L.el.classList.add('error'); L.m.status = 'error'; L.m.error = d.text; L.m.content = L.content; if (/429|503|busy|concurrency|rate/i.test(d.text)) toast(t('allBusy'), 'err'); addInterruptedActions(L.el, L.m); break; }
     case 'stopped': { $('.meta', L.el).textContent = t('stopped'); L.m.status = 'stopped'; L.m.content = L.content; addInterruptedActions(L.el, L.m); break; }
     case 'done': {
       $('.content', L.el).classList.remove('streaming'); L.el.classList.remove('streaming');

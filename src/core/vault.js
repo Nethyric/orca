@@ -129,8 +129,8 @@ function candidates(alias) {
 function liveCount(alias) { const v = current(); if (!v) return 0; return ((v.upstreams || {})[alias] || []).filter((u) => u && u.url && u.key && u.model && !(disabled.get(u.id || u.key) > Date.now())).length; }
 function markBad(u, status) {
   const id = u.id || u.key;
-  // 401/402/403 = dead or out of credit → rest 6 h; 429 = busy → 90 s; 5xx → 30 s
-  const ms = [401, 402, 403].includes(status) ? 6 * 3600e3 : status === 429 ? 90e3 : 30e3;
+  // 401/402/403 = dead or out of credit → rest 6 h; 429 = busy → 20 s; 5xx → 15 s (free pools clear in seconds; a long rest just hides a live key)
+  const ms = [401, 402, 403].includes(status) ? 6 * 3600e3 : status === 429 ? 20e3 : 15e3;
   disabled.set(id, Date.now() + ms);
 }
 function isVaultModel(cfg) { return cfg && typeof cfg.model === 'string' && cfg.model.startsWith('orca/'); }
