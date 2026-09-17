@@ -28,7 +28,7 @@ function writeChat(c) {
 }
 
 function createChat({ title = '', mode = 'direct', model = '', models = [] } = {}) {
-  const c = { id: uid(), title, mode, model, models, createdAt: Date.now(), updatedAt: Date.now(), pinned: false, messages: [], votes: [] };
+  const c = { id: uid(), title, mode, model, models, createdAt: Date.now(), updatedAt: Date.now(), pinned: false, messages: [], votes: [], notes: '', tags: [] };
   return writeChat(c);
 }
 
@@ -39,14 +39,14 @@ function sweepRunning() {
     if (!f.endsWith('.json')) continue;
     let c; try { c = JSON.parse(fs.readFileSync(path.join(chatsDir(), f), 'utf8')); } catch (_) { continue; }
     let dirty = false;
-    for (const m of c.messages || []) if (m.role === 'assistant' && m.status === 'running') { m.status = 'stopped'; if (!m.content) m.content = '(interrupted)'; dirty = true; n++; }
+    for (const m of c.messages || []) if (m.role === 'assistant' && m.status === 'running') { m.status = 'stopped'; m.interrupted = true; m.partial = !!(m.content || '').trim(); dirty = true; n++; }
     if (dirty) { cache.delete(c.id); fs.writeFileSync(path.join(chatsDir(), f), JSON.stringify(c)); }
   }
   return n;
 }
 function importChat(c) {
   if (!/^[\w-]+$/.test(String(c.id))) c.id = uid();
-  const clean = { id: c.id, title: String(c.title || '').slice(0, 200), mode: c.mode || 'direct', models: c.models || [], messages: c.messages || [], votes: c.votes || [], pinned: !!c.pinned, createdAt: c.createdAt || Date.now(), updatedAt: c.updatedAt || Date.now() };
+  const clean = { id: c.id, title: String(c.title || '').slice(0, 200), mode: c.mode || 'direct', models: c.models || [], messages: c.messages || [], votes: c.votes || [], pinned: !!c.pinned, notes: String(c.notes || ''), tags: Array.isArray(c.tags) ? c.tags : [], createdAt: c.createdAt || Date.now(), updatedAt: c.updatedAt || Date.now() };
   return writeChat(clean);
 }
 function listChats() {
@@ -57,7 +57,7 @@ function listChats() {
     const c = readChat(f.slice(0, -5));
     if (!c) continue;
     const last = [...c.messages].reverse().find((m) => m.role === 'assistant' || m.role === 'user');
-    out.push({ id: c.id, title: c.title || '', mode: c.mode, model: c.model, models: c.models, pinned: !!c.pinned, createdAt: c.createdAt, updatedAt: c.updatedAt, count: c.messages.length, preview: last ? String(last.content || '').replace(/<attached_(file|image)[\s\S]*?<\/attached_\1>/g, '').replace(/\n\n<attached_(file|image)[\s\S]*$/, '').slice(0, 120) : '' });
+    out.push({ id: c.id, title: c.title || '', mode: c.mode, model: c.model, models: c.models, pinned: !!c.pinned, tags: c.tags || [], hasNotes: !!(c.notes || '').trim(), pins: c.messages.filter((x) => x.pinned).length, forked: !!c.forkedFrom, createdAt: c.createdAt, updatedAt: c.updatedAt, count: c.messages.length, preview: last ? String(last.content || '').replace(/<attached_(file|image)[\s\S]*?<\/attached_\1>/g, '').replace(/\n\n<attached_(file|image)[\s\S]*$/, '').slice(0, 120) : '' });
   }
   out.sort((a, b) => (b.pinned - a.pinned) || (b.updatedAt - a.updatedAt));
   indexCache = out;
@@ -87,6 +87,26 @@ function truncateAfter(chatId, msgId) {
   const i = c.messages.findIndex((x) => x.id === msgId);
   if (i >= 0) { c.messages = c.messages.slice(0, i); writeChat(c); }
   return c;
+}
+function deleteMessage(chatId, msgId) {
+  const c = readChat(chatId); if (!c) return false;
+  const m = c.messages.find((x) => x.id === msgId); if (!m) return false;
+  // an assistant message may be one lane of a run; a user message takes its answers with it
+  const drop = new Set([msgId]);
+  if (m.role === 'user') { const i = c.messages.indexOf(m); for (let k = i + 1; k < c.messages.length && c.messages[k].role === 'assistant'; k++) drop.add(c.messages[k].id); }
+  c.messages = c.messages.filter((x) => !drop.has(x.id)); writeChat(c); return true;
+}
+// Branch a conversation: a new chat that contains everything up to (and including) messageId.
+function forkChat(chatId, messageId, title) {
+  const c = readChat(chatId); if (!c) return null;
+  let i = messageId ? c.messages.findIndex((x) => x.id === messageId) : c.messages.length - 1;
+  if (i < 0) return null;
+  // branching from a user message takes its answers along; from an answer, the sibling lanes of the same run
+  if (c.messages[i].role === 'user') { while (c.messages[i + 1] && c.messages[i + 1].role === 'assistant') i++; }
+  else { const runId = c.messages[i].runId; while (runId && c.messages[i + 1] && c.messages[i + 1].runId === runId) i++; }
+  const msgs = c.messages.slice(0, i + 1).map((x) => ({ ...JSON.parse(JSON.stringify(x)), id: uid() }));
+  const n = { id: uid(), title: String(title || ((c.title || 'chat') + ' · branch')).slice(0, 200), mode: c.mode, model: c.model, models: c.models, createdAt: Date.now(), updatedAt: Date.now(), pinned: false, messages: msgs, votes: [], notes: c.notes || '', forkedFrom: { chatId: c.id, messageId: c.messages[i].id } };
+  return writeChat(n);
 }
 function addVote(chatId, vote) { const c = readChat(chatId); if (!c) return null; c.votes.push({ ...vote, ts: Date.now() }); writeChat(c); return c; }
 
@@ -160,8 +180,10 @@ function restoreCheckpoint(id, direction = 'before') {
 function exportChat(id) {
   const c = readChat(id); if (!c) return '';
   const lines = [`# ${c.title || 'ORCA chat'}`, '', `_${new Date(c.createdAt).toLocaleString()} · mode: ${c.mode}_`, ''];
+  if ((c.notes || '').trim()) lines.push('## Notes', '', c.notes.trim(), '');
   for (const m of c.messages) {
-    const who = m.role === 'user' ? '👤 User' : `🐋 ORCA${m.model ? ' (' + m.model + ')' : ''}`;
+    if (m.hidden) continue;
+    const who = (m.role === 'user' ? '👤 User' : `🐋 ORCA${m.model ? ' (' + m.model + ')' : ''}`) + (m.pinned ? ' 📌' : '');
     lines.push(`## ${who}`, '', String(m.content || ''), '');
     for (const e of m.events || []) if (e.event === 'tool_call') lines.push(`> 🔧 \`${e.data.name}\` ${JSON.stringify(e.data.args).slice(0, 200)}`);
     lines.push('');
@@ -169,4 +191,4 @@ function exportChat(id) {
   return lines.join('\n');
 }
 
-module.exports = { importChat, sweepRunning, createChat, listChats, getChat, updateChat, deleteChat, addMessage, updateMessage, truncateAfter, addVote, leaderboard, search, saveCheckpoint, listCheckpoints, restoreCheckpoint, exportChat, uid };
+module.exports = { importChat, sweepRunning, createChat, listChats, getChat, updateChat, deleteChat, addMessage, updateMessage, deleteMessage, forkChat, truncateAfter, addVote, leaderboard, search, saveCheckpoint, listCheckpoints, restoreCheckpoint, exportChat, uid };

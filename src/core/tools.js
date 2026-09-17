@@ -73,6 +73,18 @@ function spawnSpec(command, shellPref) {
 function killTree(child) {
   try { if (isWin) execSync(`taskkill /pid ${child.pid} /T /F`, { stdio: 'ignore', windowsHide: true }); else process.kill(-child.pid, 'SIGKILL'); } catch (_) { try { child.kill('SIGKILL'); } catch (__) {} }
 }
+// Terminal noise costs context and confuses models: drop ANSI colour codes, keep only the final
+// state of \r-progress lines (npm/pip/curl bars), collapse runs of identical lines, cap the size.
+function quiet(out) {
+  let t = String(out || '').replace(/\x1b\[[0-9;?]*[ -\/]*[@-~]/g, '').replace(/\x1b\][^\x07]*\x07/g, '');
+  t = t.split('\n').map((l) => { const i = l.lastIndexOf('\r'); return i === -1 ? l : l.slice(i + 1); }).join('\n');
+  const lines = t.split('\n'); const kept = []; let rep = 0;
+  for (const l of lines) { if (kept.length && l === kept[kept.length - 1] && l.trim()) { rep++; continue; } if (rep) { kept.push(`… (previous line repeated ${rep} more times)`); rep = 0; } kept.push(l); }
+  if (rep) kept.push(`… (previous line repeated ${rep} more times)`);
+  t = kept.join('\n').trim();
+  if (!t) return '(no output)';
+  return t.length > 8000 ? t.slice(0, 2500) + `\n…[${t.length - 8000} chars omitted]…\n` + t.slice(-5500) : t;
+}
 function runShell({ command, timeout, shell }) {
   timeout = timeout || config.load().shellTimeout || 120;
   const spec = spawnSpec(command, shell);
@@ -80,18 +92,22 @@ function runShell({ command, timeout, shell }) {
     let out = ''; let done = false;
     const child = spawn(spec.cmd, spec.args, { cwd: WS(), windowsHide: true, detached: !isWin, env: childEnv(), ...spec.opts });
     const timer = setTimeout(() => { if (!done) { done = true; killTree(child); resolve({ exit_code: 124, output: out.slice(-8000) + `\n[timed out after ${timeout}s]` }); } }, timeout * 1000);
-    child.stdout.on('data', (d) => { out += d.toString('utf8'); });
-    child.stderr.on('data', (d) => { out += d.toString('utf8'); });
+    child.stdout.on('data', (d) => { out += d.toString('utf8'); if (out.length > 400000) out = out.slice(-200000); });
+    child.stderr.on('data', (d) => { out += d.toString('utf8'); if (out.length > 400000) out = out.slice(-200000); });
     child.on('error', (e) => { if (!done) { done = true; clearTimeout(timer); resolve({ exit_code: 1, output: String(e.message) }); } });
-    child.on('close', (code) => { if (!done) { done = true; clearTimeout(timer); resolve({ exit_code: code ?? 0, output: (out || '(no output)').slice(-8000) }); } });
+    child.on('close', (code) => { if (!done) { done = true; clearTimeout(timer); resolve({ exit_code: code ?? 0, output: quiet(out) }); } });
   });
 }
 
+let pyCache = null, pyCacheAt = 0;
 function findPython() {
+  if (pyCache !== null && Date.now() - pyCacheAt < (pyCache ? 30 : 5) * 60e3) return pyCache; // re-probe every 30 min (5 min while missing)
+  pyCache = '';
   for (const py of isWin ? ['python', 'py -3', 'python3'] : ['python3', 'python']) {
-    try { const o = execSync(`${py} --version`, { stdio: 'pipe', windowsHide: true, env: childEnv(), shell: isWin ? 'cmd.exe' : '/bin/sh' }).toString(); if (/Python 3/.test(o)) return py; } catch (_) {}
+    try { const o = execSync(`${py} --version`, { stdio: 'pipe', windowsHide: true, timeout: 4000, env: childEnv(), shell: isWin ? 'cmd.exe' : '/bin/sh' }).toString(); if (/Python 3/.test(o)) { pyCache = py; break; } } catch (_) {}
   }
-  return null;
+  pyCacheAt = Date.now();
+  return pyCache || null;
 }
 
 const impl = {
@@ -116,7 +132,7 @@ const impl = {
       const timer = setTimeout(() => { if (!done) { done = true; killTree(child); resolve({ exit_code: 124, output: out.slice(-8000) + `\n[timed out after ${timeout}s]` }); } }, timeout * 1000);
       child.stdout.on('data', (d) => { out += d; }); child.stderr.on('data', (d) => { out += d; });
       child.on('error', (e) => { if (!done) { done = true; clearTimeout(timer); resolve({ exit_code: 1, output: e.message }); } });
-      child.on('close', (code) => { if (!done) { done = true; clearTimeout(timer); resolve({ exit_code: code ?? 0, output: (out || '(no output)').slice(-8000) }); } });
+      child.on('close', (code) => { if (!done) { done = true; clearTimeout(timer); resolve({ exit_code: code ?? 0, output: quiet(out) }); } });
     });
   },
 

@@ -22,6 +22,16 @@ function authHeadersFor(cfg) {
 }
 const tools = require('./tools');
 const store = require('./store');
+const APP = (() => { try { return require('../../orca.config.json'); } catch (_) { return {}; } })();
+const APP_VERSION = 'v' + ((() => { try { return require('../../package.json').version; } catch (_) { return '0.0.0'; } })());
+function nowString() {
+  const d = new Date();
+  const tz = (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone; } catch (_) { return ''; } })();
+  const off = -d.getTimezoneOffset(); const sign = off >= 0 ? '+' : '-'; const hh = String(Math.floor(Math.abs(off) / 60)).padStart(2, '0'); const mm = String(Math.abs(off) % 60).padStart(2, '0');
+  const wd = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][d.getDay()];
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${wd}, ${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())} local time (UTC${sign}${hh}:${mm}${tz ? ', ' + tz : ''})`;
+}
 
 function memorySnippet() {
   try {
@@ -45,9 +55,12 @@ const L = () => STR[config.load().lang] || STR.en;
 const HEAVY = /(بساز|ایجاد کن|درست کن|پیاده|پروژه|کد|برنامه|اسکریپت|نصب|تحلیل|دیباگ|رفع|باگ|تست|فایل|پوشه|سایت|اپ\b|بازی|الگوریتم|بهینه|ریفکتور|دیتابیس|سرور|بنویس.*(کد|تابع|کلاس)|\bbuild\b|\bcreate\b|\bimplement\b|\bwrite (a |an |the )?(code|script|program|app|function|class|module)|\bfix\b|\bdebug\b|\brefactor\b|\binstall\b|\bdeploy\b|\banaly[sz]e\b|\bproject\b|\btest\b|\bfile\b|\bfolder\b|\bscript\b|\bapi\b|\bdatabase\b|\bwebsite\b|\bgame\b|\balgorithm\b|\boptimi[sz]e\b|\bmigrate\b|```)/i;
 function routeAuto({ text = '', history = [], planMode = false, hasFiles = false }) {
   const models = config.allModels().filter((m) => config.resolve(m.key)?.apiKey);
-  const strong = models.find((m) => m.tier === 'strong') || models[0];
-  const fast = models.find((m) => m.tier === 'fast') || strong;
+  const live = (m) => !vault.isVaultModel(m) || vault.liveCount(vault.aliasOf(m)) > 0;
+  let strong = models.find((m) => m.tier === 'strong') || models[0];
+  let fast = models.find((m) => m.tier === 'fast') || strong;
   if (!strong || !fast) return config.load().defaultModel;
+  if (!live(fast) && live(strong)) fast = strong; // the fast model is rate-limited right now → the strong one answers faster
+  if (!live(strong) && live(fast)) strong = fast;
   if (planMode || hasFiles || text.length > 700 || HEAVY.test(text)) return strong.key;
   // continuing a task where tools were just used → stay strong
   const lastA = [...history].reverse().find((m) => m.role === 'assistant');
@@ -87,11 +100,18 @@ function systemPrompt(opts = {}) {
   const lang = ({ en: 'English', fa: 'Persian (Farsi)', ru: 'Russian', zh: 'Simplified Chinese' })[c.lang] || 'English';
   const persona = (c.persona || '').trim() ? `\n\nABOUT THE USER: ${c.persona.trim().slice(0, 1500)}` : '';
   const rules = (c.rules || '').trim() ? `\n\nUSER RULES (always follow):\n${c.rules.trim().slice(0, 6000)}` : '';
+  const notes = (opts.notes || '').trim() ? `\n\nCHAT NOTES (the user's own notes for this conversation — decisions, terminology, constraints; treat as current truth):\n${opts.notes.trim().slice(0, 4000)}` : '';
+  const pins = Array.isArray(opts.pinned) && opts.pinned.length ? `\n\nPINNED MESSAGES (the user pinned these earlier in this conversation; they stay binding no matter how long the chat gets):\n${opts.pinned.map((p, i) => `${i + 1}. [${p.role}] ${String(p.text || '').replace(/\s+/g, ' ').trim().slice(0, 700)}`).join('\n').slice(0, 5000)}` : '';
+  const web = opts.webMode ? `\n\nWEB MODE IS ON for this message: research first (web_search, then fetch_page the best 1-3 sources), then answer with inline source links. Do not answer from memory alone.` : '';
   const effort = c.reasoningEffort === 'high' ? '\n- Think carefully and thoroughly before acting; double-check edge cases and verify results twice.' : c.reasoningEffort === 'low' ? '\n- Be quick and pragmatic; skip deep deliberation for simple tasks.' : '';
   const plan = opts.planMode ? `
 
 PLAN MODE IS ON: do NOT modify anything. Investigate (read files, search) as needed, then reply with a concise numbered implementation plan (files to create/change, commands to run, risks). End with exactly the phrase "Shall I execute?" translated into the user's language (fa: "اجرا کنم؟", ru: "Выполнить?", zh: "要执行吗？") and wait.` : '';
-  return `You are ORCA, an elite autonomous AI agent running as a desktop app on the user's computer (${os.platform()} ${os.release()} ${os.arch()}). Date: ${new Date().toISOString().slice(0, 10)}.
+  const model = opts.modelLabel ? `\nThe language model currently serving you is "${opts.modelLabel}" (built into ORCA; it can change between messages). You are ORCA, not that model — never introduce yourself as it or as a product of its vendor.` : '';
+  return `You are ORCA ${APP_VERSION}, an open-source autonomous AI agent made by ${APP.company || 'Nethyric'}, running as a desktop app on the user's computer (${os.platform()} ${os.release()} ${os.arch()}).
+
+IDENTITY (answer these from here, instantly, without tools): maker/company: ${APP.company || 'Nethyric'} · product: ORCA · version: ${APP_VERSION} · source code, releases and updates: ${APP.homepage || 'https://github.com/' + (APP.repo || 'Nethyric/orca')} · bug reports: https://github.com/${APP.repo || 'Nethyric/orca'}/issues · license: MIT · new versions are announced automatically inside the app.${model}
+NOW: ${nowString()}. Use this for anything time-related ("today", "this year", deadlines, ages, "latest"); your training data is older than this date, so verify recent facts with web_search.
 
 TOOLS (real, executed on this machine — never fake a result): shell (${process.platform === 'win32' ? 'cmd.exe by default; PowerShell auto-detected' : 'bash'}), run_node (always available), ${py ? 'run_python (' + py + ')' : 'NO Python — use run_node'}, files (read_file/write_file/edit_file/delete_file/list_files/glob/grep) in workspace "${ws}" (shell cwd; relative paths resolve there), diagnostics (syntax check), todo_write/todo_read (visible checklist), task (sub-agents with fresh context, run in parallel), web_search + fetch_page + http_request, VISION: view_image (OCR eng+fas${vision ? ' + vision model ' + vision.model : '; no vision model configured — text-only models, OCR is what you get'}), screenshot (headless Chrome), browser_check (headless Chrome: runtime errors + screenshot of any HTML/URL — use it instead of installing playwright/puppeteer), SOCIAL: social_download (Instagram/TikTok/X/YouTube/… videos, photos, carousels, profiles, playlists → downloads/), social_trending (TikTok explore feed & search, YouTube trending, X trends, Instagram user posts; download=true to fetch), GENERATE: generate_image (text→image, free provider built in), generate_video (text→video; real T2V with a Replicate/fal key, otherwise animated AI key-frames), OFFICE: write_docx/read_docx (Word), write_xlsx/read_xlsx (Excel, formulas, csv), write_pptx (designed PowerPoint decks), read_pdf, MEDIA (built-in ffmpeg, no install): media_info, media_edit (trim/convert/resize/compress/extract_audio/speed/gif/thumbnail/text watermark/crop/rotate/volume/fade), media_concat, media_from_images (slideshow), media_subtitles; remember/recall long-term memory, project_init (ORCA.md project memory), ask_user.
 
@@ -99,7 +119,9 @@ HOW TO WORK
 - Act first, ask only when a wrong guess would be costly. Never open with a questionnaire: pick sensible defaults, state them in one line, and start building; the user can redirect you. If the user answers a question with a bare choice/token/number, that IS the answer — continue immediately. Decompose big goals; call independent tools together in one turn (they run in parallel).
 - Secrets the user pastes (API tokens, keys) go into a config file or .env, never hard-coded into source and never echoed back in full.
 - Build real things end-to-end: create files, run them, read errors, fix, re-run. Never stop at "you could…" when you can do it.
-- OUTPUT LIMIT: about 4000 tokens per turn, thinking included. Never put more than ~100 lines (≈4 KB) in one tool call. Split code into small modules (e.g. api.js, handlers.js, store.js, main.js), or write the first ~100 lines and continue with write_file(append=true). Keep thinking short when you are about to write code. One giant call gets cut off and wastes minutes.
+- THINKING: for greetings, identity/date questions and other simple requests do not deliberate — answer directly (at most 2 short lines of thought). Think longer only for real problems.
+- OUTPUT LIMIT: about 4000 tokens per turn, thinking included. Long answers are fine: ORCA automatically lets you continue where you stopped, so never shorten or summarize because of length — just write; if you are cut off you will be asked to continue seamlessly. Never put more than ~100 lines (≈4 KB) in one tool call.
+- LONG TEXT the user pasted arrives as <attached_text path="…"> with only a preview inline: the full text is already saved in that workspace file. NEVER retype or copy it into a tool call — read it with read_file/grep, or process it with run_python/run_node reading the file. Split code into small modules (e.g. api.js, handlers.js, store.js, main.js), or write the first ~100 lines and continue with write_file(append=true). Keep thinking short when you are about to write code. One giant call gets cut off and wastes minutes.
 - Verify: after writing code run it or test it; after edits re-read if unsure. Own your mistakes and fix them.
 - Stay on task: do exactly what the current message asks; never run unrelated tools (e.g. social_trending or generate_image) unless the user asked for that in this conversation.
 - Prefer zero-dependency solutions (node:test/assert, python stdlib, plain HTML/CSS/JS) over installing frameworks unless asked. If the same command fails twice, do NOT retry variations of it — change approach (simplify, drop the dependency) or report the blocker.
@@ -113,7 +135,7 @@ HOW TO WORK
 - Images the user attaches are saved under attachments/ and pre-analyzed for you (OCR text${vision ? ' + vision description' : ''} appears inside <attached_image>). Use view_image on any image path/URL to inspect it (question= what to look for). Never claim you cannot see images without trying view_image first; if only OCR is available, say what the OCR read and what could not be determined.
 - Social media: for "download this link" use social_download directly (no research needed). For "trending/explore/popular videos" use social_trending (platform, region, query, download=true, max_download). Instagram Explore/stories/private content need the user's cookies — say so briefly and offer the alternatives instead of failing silently. Report every saved file path.
 - WEB APPS, SITES & GAMES: build them properly, not as demos. Structure: index.html + style.css + main.js (+ modules) unless the user asks for a single file. Include a real layout (header/nav/hero/sections/footer for sites; HUD, menu, pause, game-over, restart, best score for games), responsive CSS, keyboard + touch input, sensible defaults, no external CDNs (offline must work), no placeholder lorem ipsum. After writing, ALWAYS run browser_check on the entry HTML: it loads the page in headless Chrome, reports console errors/uncaught exceptions and takes a screenshot — fix every error and re-check before you answer. If browser_check is unavailable, run a quick node --check on the JS and a static sanity pass (matching braces, referenced ids exist). Tell the user the path and that they can open it from the Files tab.
-- Final answer: concise Markdown in the user's language (default ${lang}); code, commands and paths in English. State what you did, results, file paths. Files you produced (images, videos, docs) → list their paths so the UI can preview them. No tool-output dumps unless asked.${effort}${plan}${persona}${rules}${projectMemory()}${memorySnippet()}`;
+- Final answer: concise Markdown in the user's language (default ${lang}); code, commands and paths in English. State what you did, results, file paths. Files you produced (images, videos, docs) → list their paths so the UI can preview them. No tool-output dumps unless asked.${effort}${plan}${web}${persona}${rules}${notes}${pins}${projectMemory()}${memorySnippet()}`;
 }
 
 // Recover answer text from an unterminated <think> block. Some servers (vLLM w/ MiniMax) swallow
@@ -180,6 +202,34 @@ function tidyAnswer(content, reasoning) {
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// rough token estimate when the provider sends no usage chunk (stream cut) — 1 token ≈ 4 chars of English/code, ≈ 2 chars of Persian/CJK
+function estimateUsage(messages, content, reasoning) {
+  const tok = (t) => { t = String(t || ''); const wide = (t.match(/[\u0600-\u06FF\u0400-\u04FF\u4e00-\u9fff\u3040-\u30ff]/g) || []).length; return Math.round((t.length - wide) / 4 + wide / 2); };
+  const prompt = messages.reduce((a, m) => a + tok(typeof m.content === 'string' ? m.content : JSON.stringify(m.content || '')) + (m.tool_calls ? tok(JSON.stringify(m.tool_calls)) : 0), 0) + 5000;
+  return { prompt_tokens: prompt, completion_tokens: tok(content) + tok(reasoning), estimated: true };
+}
+const MAX_CONTINUATIONS = 8; // ≈ 9 × 4k tokens ≈ 100 KB of answer before we give up stitching
+
+// Stitch a continuation onto the text that was cut off: drop any overlap the model repeated
+// (it often restarts the last sentence or code line) so the seam is invisible.
+function joinContinuation(prev, next) {
+  if (!prev) return next;
+  let b = String(next || '').replace(/^\s+/, ''); let fenceStripped = false;
+  // cut happened inside a ``` block and the model re-opened a fence → drop the duplicate opener
+  if ((prev.match(/```/g) || []).length % 2 === 1) { const m = b.match(/^```[\w+-]*[ \t]*\n/); if (m) { b = b.slice(m[0].length); fenceStripped = true; } }
+  // 1) exact overlap: the continuation repeats the last words
+  const max = Math.min(400, prev.length, b.length);
+  for (let k = max; k >= 12; k--) if (prev.endsWith(b.slice(0, k))) return prev + b.slice(k);
+  // 2) the model restarted the (partial) last line
+  const nl = prev.lastIndexOf('\n'); const lastLine = prev.slice(nl + 1);
+  if (lastLine.trim().length >= 6 && b.startsWith(lastLine.trimStart())) return prev.slice(0, nl + 1) + b;
+  // 3) it restarted from an earlier line/sentence that is still in the tail of what we have
+  const head = b.slice(0, 60);
+  if (head.length >= 20) { const i = prev.lastIndexOf(head); if (i !== -1 && prev.length - i <= 600) return prev.slice(0, i) + b; }
+  if (fenceStripped) return prev + (/\n$/.test(prev) ? '' : '\n') + b;
+  return prev + next; // keep the model's own leading whitespace ("…the server" + " with node")
+}
+
 const RETRYABLE = new Set([408, 409, 425, 429, 500, 502, 503, 504]);
 
 // ---- streaming call: yields deltas via onDelta({type:'content'|'reasoning', text}) ----
@@ -210,26 +260,52 @@ async function streamOnce(cfg, messages, onDelta, signal, useTools, temperature)
     const sr = splitReasoning(m);
     if (sr.reasoning) onDelta({ type: 'reasoning', text: sr.reasoning });
     if (sr.content) onDelta({ type: 'content', text: sr.content });
-    return { content: sr.content, reasoning: sr.reasoning, tool_calls: m.tool_calls || [], usage: j.usage };
+    return { content: sr.content, reasoning: sr.reasoning, tool_calls: m.tool_calls || [], usage: j.usage, finish: j.choices?.[0]?.finish_reason || '' };
   }
   const reader = r.body.getReader();
   const dec = new TextDecoder();
-  let finish = '';
+  let finish = '', sawDone = false;
   let buf = '', content = '', reasoning = '', usage = null, inThink = false, pending = '';
   const calls = new Map();
   // Tag-safe splitter: <think>…</think> goes to reasoning, everything else to content.
   // Tags may arrive split across chunks ("<thi" + "nk>"), so hold back a partial-tag tail.
+  let softClosed = false, softMark = 0; // we guessed the end of an unterminated <think> at a "\n\n\n" gap
   const drain = (final) => {
     while (pending.length) {
-      const tag = inThink ? '</think>' : '<think>';
-      const i = pending.indexOf(tag);
+      let tag = inThink ? '</think>' : '<think>';
+      let i = pending.indexOf(tag);
+      if (softClosed && !inThink) { const j = pending.indexOf('</think>'); if (j !== -1 && (i === -1 || j < i)) { tag = '</think>'; i = j; } }
+      if (inThink && i === -1) {
+        // No closing tag yet. Some servers drop </think>; the answer then follows a blank-line gap ("\n\n\n").
+        // Hold the text after such a gap until we can tell whether it looks like an answer, then show it as content.
+        const gap = pending.indexOf('\n\n\n');
+        if (gap !== -1 && reasoning.length + gap > 80) {
+          const after = pending.slice(gap + 3);
+          if (after.length < 24 && !final) { const seg = pending.slice(0, gap); if (seg) { reasoning += seg; onDelta({ type: 'reasoning', text: seg }); } pending = pending.slice(gap); break; }
+          if (/^\s*(#{1,6}\s|```|\*\*|[-*]\s|\d+[.)]\s|[\u0600-\u06FF\u0400-\u04FF\u4e00-\u9fff]|[A-Z][a-z]+[^\n]{0,80}[.:!]\s)/.test(after) || (final && after.trim().length > 40)) {
+            const seg = pending.slice(0, gap); if (seg) { reasoning += seg; onDelta({ type: 'reasoning', text: seg }); }
+            pending = after; inThink = false; softClosed = true; softMark = content.length; continue;
+          }
+          // a gap inside the monologue: flush through it and keep looking
+          const seg = pending.slice(0, gap + 3); reasoning += seg; onDelta({ type: 'reasoning', text: seg }); pending = after; continue;
+        }
+      }
       if (i !== -1) {
         const seg = pending.slice(0, i);
         if (seg) { if (inThink) { reasoning += seg; onDelta({ type: 'reasoning', text: seg }); } else { content += seg; onDelta({ type: 'content', text: seg }); } }
-        pending = pending.slice(i + tag.length); inThink = !inThink; continue;
+        pending = pending.slice(i + tag.length);
+        if (!inThink && tag === '</think>') {
+          // a real </think> arrived after our guess: what we showed since the guess was still thinking → move it back
+          const back = content.slice(softMark); content = content.slice(0, softMark); reasoning += back; softClosed = false;
+          onDelta({ type: 'reset' }); if (reasoning) onDelta({ type: 'reasoning', text: reasoning }); if (content) onDelta({ type: 'content', text: content });
+          continue;
+        }
+        if (tag === '<think>') softClosed = false;
+        inThink = !inThink; continue;
       }
       let keep = 0;
       if (!final) { const lt = pending.lastIndexOf('<'); if (lt !== -1 && pending.length - lt < 9 && tag.startsWith(pending.slice(lt))) keep = pending.length - lt; }
+      if (!final && inThink) { const nls = pending.match(/\n+$/); if (nls) keep = Math.max(keep, nls[0].length); } // a "\n\n\n" gap may arrive split across deltas
       const seg = pending.slice(0, pending.length - keep);
       if (seg) { if (inThink) { reasoning += seg; onDelta({ type: 'reasoning', text: seg }); } else { content += seg; onDelta({ type: 'content', text: seg }); } }
       pending = pending.slice(pending.length - keep);
@@ -239,7 +315,8 @@ async function streamOnce(cfg, messages, onDelta, signal, useTools, temperature)
   const flushLine = (line) => {
     if (!line.startsWith('data:')) return;
     const data = line.slice(5).trim();
-    if (!data || data === '[DONE]') return;
+    if (data === '[DONE]') { sawDone = true; return; }
+    if (!data) return;
     let j; try { j = JSON.parse(data); } catch (_) { return; }
     if (j.usage) usage = j.usage;
     if (j.choices?.[0]?.finish_reason) finish = j.choices[0].finish_reason;
@@ -272,9 +349,17 @@ async function streamOnce(cfg, messages, onDelta, signal, useTools, temperature)
     if (rec.content.trim()) { reasoning = rec.reasoning; content = rec.content.trim(); onDelta({ type: 'reset' }); onDelta({ type: 'reasoning', text: reasoning }); onDelta({ type: 'content', text: content }); }
   }
   const sr = splitReasoning({ content, reasoning_content: reasoning });
-  return { content: sr.content, reasoning: sr.reasoning, tool_calls: [...calls.values()].filter((c) => c.function.name), usage, finish };
+  const tcs = [...calls.values()].filter((c) => c.function.name);
+  if (!finish && !sawDone && !tcs.length && sr.content.trim()) finish = 'cut'; // proxy/provider closed the stream early
+  return { content: sr.content, reasoning: sr.reasoning, tool_calls: tcs, usage: usage || estimateUsage(messages, content, reasoning), finish };
   } catch (e) {
-    if (stalled && !(signal && signal.aborted)) throw stallErr();
+    if (stalled && !(signal && signal.aborted)) {
+      // the provider went silent after streaming a good part of the answer: keep it and let the agent continue it
+      drain(true);
+      const sr = splitReasoning({ content, reasoning_content: reasoning });
+      if (sr.content.trim().length > 400 && !calls.size) return { content: sr.content, reasoning: sr.reasoning, tool_calls: [], usage: usage || estimateUsage(messages, content, reasoning), finish: 'cut' };
+      throw stallErr();
+    }
     throw e;
   } finally { clearTimeout(timer); if (signal) signal.removeEventListener('abort', onAbort); }
 }
@@ -288,6 +373,8 @@ async function callModel(modelKey, messages, { emit, signal, useTools = true, te
     if (vault.isVaultModel(logical) && !vault.current()) { await vault.refresh().catch(() => {}); if (!vault.current()) { last = `${logical.label}: ${L().vaultDown}`; continue; } }
     const ups = expand(logical);
     if (!ups.length) { last = `${logical.label}: ${L().vaultDown}`; continue; }
+    // every key of this built-in model is cooling down (429/5xx a moment ago) and another model is live → don't waste a round-trip
+    if (vault.isVaultModel(logical) && vault.liveCount(vault.aliasOf(logical)) === 0 && order.slice(i + 1).some((k) => { const l = config.resolve(k); return l && l.apiKey && (!vault.isVaultModel(l) || vault.liveCount(vault.aliasOf(l)) > 0); })) { last = `${logical.label}: busy`; continue; }
     for (let u = 0; u < ups.length; u++) {
       const cfg = ups[u];
       const tries = i === 0 && u === 0 ? 3 : 2;
@@ -320,7 +407,6 @@ async function callModel(modelKey, messages, { emit, signal, useTools = true, te
 // ---------------- runs ----------------
 const runs = new Map(); // runId -> { abort, approvals: Map<callId,{resolve}>, chatId }
 
-
 // A provider cut the stream in the middle of tool-call arguments (Dahl caps output at ~4096 tokens per
 // turn, thinking included). Recover whatever complete lines of `content` we can, plus the path if it
 // was emitted before the cut, so the work is not lost.
@@ -336,11 +422,19 @@ function salvageArgs(partial) {
   return { path, content: cut > 0 ? content.slice(0, cut + 1) : '', tail: content.slice(cut + 1) };
 }
 
+// A long paste is saved to the workspace by the server; the model gets the file path plus as much of
+// the text inline as is sensible, so it can both read it directly and process it with tools.
+const PASTE_INLINE = 40000;
+function wrapPasted(m) {
+  const txt = String(m.content || ''); const lines = txt.split('\n').length;
+  const body = txt.length <= PASTE_INLINE ? txt : txt.slice(0, PASTE_INLINE) + `\n…[${txt.length - PASTE_INLINE} more characters — not shown here; read the rest from the file with read_file(offset=…) or grep]`;
+  return `${m.pastedPrefix ? m.pastedPrefix + '\n\n' : ''}<attached_text path="${m.pastedPath}" chars="${txt.length}" lines="${lines}">\n${body}\n</attached_text>`;
+}
 function toApiMessages(history) {
   // history from store: user/assistant messages with optional api transcript for tool exchanges
   const out = [];
   for (const m of history) {
-    if (m.role === 'user') out.push({ role: 'user', content: m.content });
+    if (m.role === 'user') out.push({ role: 'user', content: m.pastedPath ? wrapPasted(m) : m.content });
     else if (m.role === 'assistant') {
       if (m.api && Array.isArray(m.api) && m.api.length) out.push(...m.api);
       else if (m.content) out.push({ role: 'assistant', content: m.content });
@@ -372,7 +466,7 @@ async function runAgent(o) {
   const run = { abort: ctl, approvals: new Map(), chatId };
   runs.set(runId, run);
   tools.extras.setCurrentChat(chatId);
-  const msgs = [{ role: 'system', content: systemPrompt({ planMode: o.planMode }) }, ...toApiMessages(o.history)];
+  const msgs = [{ role: 'system', content: systemPrompt({ planMode: o.planMode, webMode: o.webMode, notes: o.notes, pinned: o.pinned, modelLabel: config.resolve(modelKey)?.label }) }, ...toApiMessages(o.history)];
   { const td = tools.extras.loadTodos(chatId); if (td.length && o.lane !== 'sub') emit('todos', { todos: td }); }
   const api = []; // assistant-side transcript for this run (persisted for context continuity)
   const checkpoints = [];
@@ -398,7 +492,7 @@ async function runAgent(o) {
       try { res = await callModel(modelKey, ctxMsgs, { emit: emitC, signal: ctl.signal, temperature }); }
       catch (e) { if (stopped()) { emit('stopped', {}); return { api, checkpoints, stopped: true }; } emit('error', { text: e.message }); return { api, checkpoints, error: e.message }; }
       usedLabel = res.label;
-      if (res.usage) { totalUsage.prompt_tokens += res.usage.prompt_tokens || 0; totalUsage.completion_tokens += res.usage.completion_tokens || 0; emit('usage', totalUsage); }
+      if (res.usage) { totalUsage.prompt_tokens += res.usage.prompt_tokens || 0; totalUsage.completion_tokens += res.usage.completion_tokens || 0; emit('usage', { ...totalUsage }); }
       if (res.reasoning) emit('thought_done', { text: res.reasoning.slice(0, 6000) });
 
       // Keep reasoning in the transcript sent back to the model (interleaved-thinking models like
@@ -411,10 +505,16 @@ async function runAgent(o) {
       }
       msgs.push(entry); api.push(entry);
 
-      if (!res.tool_calls.length && res.finish === 'length' && continuations < 2 && res.content.trim()) {
-        continuations++; carried += res.content;
-        msgs.push({ role: 'user', content: '[system] Your output hit the length limit. Continue EXACTLY where you stopped — no preamble, no repetition.' }); api.push(msgs[msgs.length - 1]);
-        emit('status', { text: L().continuing || 'ادامهٔ پاسخ…', kind: 'retry' });
+      if (!res.tool_calls.length && (res.finish === 'length' || res.finish === 'cut') && continuations < MAX_CONTINUATIONS && res.content.trim() && step < maxSteps - 1) {
+        // The provider capped the output mid-answer. Ask for the rest and stitch the chunks together —
+        // the user just sees one answer that keeps streaming.
+        continuations++;
+        const joined = joinContinuation(carried, res.content);
+        if (joined !== carried + res.content) { emit('delta', { type: 'reset' }); emit('delta', { type: 'content', text: joined }); }
+        carried = joined;
+        const tail = carried.slice(-400);
+        const inFence = (carried.match(/```/g) || []).length % 2 === 1;
+        msgs.push({ role: 'user', content: `[system] Your previous message was cut off by the output limit (not by the user). Continue the SAME answer from exactly where it stopped — no greeting, no recap, do not repeat the last words${inFence ? '. You were inside a ``` code block: continue the code directly, do NOT open a new fence and do not repeat lines already written' : ''}. Do not think about it — just continue. For reference, it ended with: ${JSON.stringify(tail)}` }); api.push(msgs[msgs.length - 1]);
         continue;
       }
       if (!res.tool_calls.length && res.finish === 'length' && !res.content.trim() && (o._lenNudges || 0) < 2) {
@@ -425,7 +525,7 @@ async function runAgent(o) {
         continue;
       }
       if (!res.tool_calls.length) {
-        if (carried) res.content = carried + res.content;
+        if (carried) res.content = joinContinuation(carried, res.content);
         if (!res.content.trim() && step < maxSteps - 1 && !o._nudged) {
           o._nudged = true;
           msgs.push({ role: 'user', content: '[system] Your previous message contained no visible answer for the user. Write the final answer now.' });

@@ -29,7 +29,7 @@ process.on('unhandledRejection', (e) => console.error('[unhandled]', e && e.stac
 function broadcast(payload) { const s = `data: ${JSON.stringify(payload)}\n\n`; for (const c of clients) { try { c.write(s); } catch (_) {} } }
 
 
-function startLane({ chatId, runId, lane, modelKey, history, planMode, autonomy }) {
+function startLane({ chatId, runId, lane, modelKey, history, planMode, autonomy, webMode, notes, pinned }) {
   const msg = store.addMessage(chatId, { role: 'assistant', content: '', model: config.resolve(modelKey)?.label || modelKey, modelKey, lane, events: [], status: 'running', runId });
   const laneRun = runId + (lane ? ':' + lane : '');
   let buffer = { content: '', reasoning: '' };
@@ -52,8 +52,8 @@ function startLane({ chatId, runId, lane, modelKey, history, planMode, autonomy 
         const ev = { event, data: event === 'checkpoint' ? { ...data, before: undefined, after: undefined } : data, ts: Date.now() };
         m.events.push(ev);
         if (event === 'final') { m.content = data.text; m.model = data.model; m.status = data.question ? 'question' : 'done'; m.usage = data.usage; buffer.content = data.text; }
-        if (event === 'error') { m.status = 'error'; m.content = buffer.content; m.error = data.text; }
-        if (event === 'stopped') { m.status = 'stopped'; m.content = buffer.content || '(متوقف شد)'; }
+        if (event === 'error') { m.status = 'error'; m.content = buffer.content; m.error = data.text; m.partial = !!buffer.content.trim(); }
+        if (event === 'stopped') { m.status = 'stopped'; m.content = buffer.content; m.partial = !!buffer.content.trim(); }
         if (event === 'thought_done') m.reasoning = data.text;
         store.updateMessage(chatId, msg.id, m);
       }
@@ -62,7 +62,7 @@ function startLane({ chatId, runId, lane, modelKey, history, planMode, autonomy 
   };
   (async () => {
     try {
-      const r = await runAgent({ chatId, runId: laneRun, history, modelKey, emit, planMode, autonomy, lane });
+      const r = await runAgent({ chatId, runId: laneRun, history, modelKey, emit, planMode, autonomy, lane, webMode, notes, pinned });
       if (r && r.api) store.updateMessage(chatId, msg.id, { api: r.api });
     } catch (e) { emit('error', { text: e.message }); }
     finally { emit('done', {}); }
@@ -162,6 +162,12 @@ async function handleApi(req, res, url) {
     if (req.method === 'DELETE') return json(res, 200, { ok: store.deleteChat(m[1]) });
     if (req.method === 'POST') return json(res, 200, store.updateChat(m[1], body) || {});
   }
+  if ((m = p.match(/^\/api\/chats\/([\w-]+)\/messages\/([\w-]+)$/))) {
+    if (req.method === 'POST') { const r = store.updateMessage(m[1], m[2], { ...(typeof body.pinned === 'boolean' ? { pinned: body.pinned } : {}) }); return r ? json(res, 200, { ok: true, pinned: !!r.pinned }) : json(res, 404, { error: 'not found' }); }
+    if (req.method === 'DELETE') return json(res, 200, { ok: store.deleteMessage(m[1], m[2]) });
+  }
+  if ((m = p.match(/^\/api\/chats\/([\w-]+)\/fork$/)) && req.method === 'POST') { const c = store.forkChat(m[1], body.messageId, body.title); return c ? json(res, 200, c) : json(res, 404, { error: 'not found' }); }
+  if ((m = p.match(/^\/api\/chats\/([\w-]+)\/pinned$/))) { const c = store.getChat(m[1]); return c ? json(res, 200, { pinned: c.messages.filter((x) => x.pinned).map((x) => ({ id: x.id, role: x.role, text: String(x.content || '').slice(0, 2000), ts: x.ts })) }) : json(res, 404, { error: 'not found' }); }
   if ((m = p.match(/^\/api\/chats\/([\w-]+)\/export$/))) { res.writeHead(200, { 'content-type': 'text/markdown; charset=utf-8', 'content-disposition': `attachment; filename="orca-${m[1]}.md"` }); return res.end(store.exportChat(m[1])); }
   if ((m = p.match(/^\/api\/chats\/([\w-]+)\/checkpoints$/))) return json(res, 200, { checkpoints: store.listCheckpoints(m[1]) });
   if ((m = p.match(/^\/api\/chats\/([\w-]+)\/vote$/))) { store.addVote(m[1], body); return json(res, 200, { ok: true, leaderboard: store.leaderboard() }); }
@@ -170,7 +176,26 @@ async function handleApi(req, res, url) {
 
   // ---- send message / run ----
   if (p === '/api/send' && req.method === 'POST') {
-    let { chatId, text, mode = 'direct', model, models = [], planMode = false, autonomy, regenerateFrom, images = [] } = body;
+    let { chatId, text, mode = 'direct', model, models = [], planMode = false, autonomy, regenerateFrom, images = [], webMode = false, continueFrom } = body;
+    // "Continue" on an interrupted/stopped answer: no new user text — the agent resumes the same turn
+    if (continueFrom && text == null) {
+      const chat0 = store.getChat(chatId); if (!chat0) return json(res, 404, { error: 'chat not found' });
+      const prev = chat0.messages.find((x) => x.id === continueFrom && x.role === 'assistant');
+      if (!prev) return json(res, 404, { error: 'message not found' });
+      text = `[system] Your previous answer was interrupted (${prev.status || 'stopped'}). Continue it from exactly where it stopped — no greeting, no recap. It ended with: ${JSON.stringify(String(prev.content || '').slice(-400))}`;
+      body._hidden = true;
+    }
+    // A very long paste is saved as a workspace file so the model can read/process it with tools instead of
+    // retyping it into a tool call (which used to blow the output limit and stall for minutes).
+    let pasted = null;
+    if (typeof text === 'string' && text.length > 12000 && !/<attached_(file|image|text)/.test(text)) {
+      try {
+        const dir = path.join(config.workspaceDir(), 'attachments'); fs.mkdirSync(dir, { recursive: true });
+        const name = `paste-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}.txt`;
+        fs.writeFileSync(path.join(dir, name), text);
+        pasted = 'attachments/' + name;
+      } catch (_) {}
+    }
     // attached images → hidden analysis block the text-only models can read (OCR + vision if configured)
     if (Array.isArray(images) && images.length && text != null) {
       const blocks = [];
@@ -199,8 +224,10 @@ async function handleApi(req, res, url) {
     if (planMode && /^(بله|آره|اره|باشه|اوکی|ok|okay|yes|y|go|do it|execute|run|proceed|اجرا)/i.test(String(text || '').trim()) && String(text || '').trim().length < 60) planMode = false;
     const chat = store.getChat(chatId); if (!chat) return json(res, 404, { error: 'chat not found' });
     if (regenerateFrom) store.truncateAfter(chatId, regenerateFrom);
-    if (text != null) store.addMessage(chatId, { role: 'user', content: String(text) });
+    if (text != null) store.addMessage(chatId, { role: 'user', content: String(text), ...(pasted ? { pastedPath: pasted } : {}), ...(body._hidden ? { hidden: true } : {}) });
     const fresh = store.getChat(chatId);
+    const notes = fresh.notes || '';
+    const pinned = fresh.messages.filter((x) => x.pinned && (x.role === 'user' || x.role === 'assistant')).map((x) => ({ role: x.role, text: x.content }));
     // direct mode context = user msgs + lane-less assistant msgs (+ lane 'a' if the chat used to be a comparison)
     const history = fresh.messages.filter((x) => x.role === 'user' || (x.role === 'assistant' && (!x.lane || x.lane === 'a')));
     const runId = store.uid();
@@ -210,17 +237,17 @@ async function handleApi(req, res, url) {
     let chosen = model || cfg.defaultModel;
     if (mode === 'direct') {
       if (chosen === 'auto') chosen = routeAuto({ text: String(text || ''), history, planMode, hasFiles: /<attached_(file|image)/.test(String(text || '')) });
-      lanes.push(startLane({ chatId, runId, lane: '', modelKey: chosen, history, planMode, autonomy }));
+      lanes.push(startLane({ chatId, runId, lane: '', modelKey: chosen, history, planMode, autonomy, webMode, notes, pinned }));
     } else {
       let pair = (models.length === 2 ? models : cfg.compareModels).map((k) => (k === 'auto' ? routeAuto({ text: String(text || ''), history, planMode }) : k));
       if (mode === 'battle') { const pool = config.allModels().filter((x) => config.resolve(x.key)?.apiKey).map((x) => x.key); pair = pool.sort(() => Math.random() - 0.5).slice(0, 2); if (pair.length < 2) pair = [cfg.defaultModel, cfg.defaultModel]; }
       store.updateChat(chatId, { mode, models: pair });
       const laneHistory = (lane) => fresh.messages.filter((x) => x.role === 'user' || (x.role === 'assistant' && (x.lane === lane || !x.lane)));
-      lanes.push(startLane({ chatId, runId, lane: 'a', modelKey: pair[0], history: laneHistory('a'), planMode, autonomy }));
-      lanes.push(startLane({ chatId, runId, lane: 'b', modelKey: pair[1], history: laneHistory('b'), planMode, autonomy }));
+      lanes.push(startLane({ chatId, runId, lane: 'a', modelKey: pair[0], history: laneHistory('a'), planMode, autonomy, webMode, notes, pinned }));
+      lanes.push(startLane({ chatId, runId, lane: 'b', modelKey: pair[1], history: laneHistory('b'), planMode, autonomy, webMode, notes, pinned }));
     }
     const titleSrc = String(text || '').replace(/<attached_(file|image)[\s\S]*?<\/attached_\1>/g, '').replace(/\n\n<attached_(file|image)[\s\S]*$/, '').trim() || (images.length ? (cfg.lang === 'en' ? 'Image question' : 'سؤال دربارهٔ تصویر') : '');
-    if (!chat.title && titleSrc) { const fast = config.allModels().find((m) => m.tier === 'fast' && config.resolve(m.key)?.apiKey)?.key || cfg.defaultModel; quick(fast, `Write a 3-6 word title (same language as the message, no quotes, no punctuation) for this chat message:\n\n${titleSrc.slice(0, 500)}`).then((t) => { const tt = (t || '').split('\n')[0].trim().slice(0, 60); if (tt) { store.updateChat(chatId, { title: tt }); broadcast({ event: 'title', chatId, data: { title: tt } }); } }).catch(() => {}); }
+    if (!chat.title && titleSrc && !body._hidden) { const fast = config.allModels().find((m) => m.tier === 'fast' && config.resolve(m.key)?.apiKey)?.key || cfg.defaultModel; quick(fast, `Write a 3-6 word title (same language as the message, no quotes, no punctuation) for this chat message:\n\n${titleSrc.slice(0, 500)}`).then((t) => { const tt = (t || '').split('\n')[0].trim().slice(0, 60); if (tt) { store.updateChat(chatId, { title: tt }); broadcast({ event: 'title', chatId, data: { title: tt } }); } }).catch(() => {}); }
     return json(res, 200, { runId, lanes, models: lanes.length === 2 ? store.getChat(chatId).models : [chosen] });
   }
   if (p === '/api/stop' && req.method === 'POST') { let n = 0; for (const id of body.runIds || [body.runId]) if (stopRun(id)) n++; return json(res, 200, { stopped: n }); }

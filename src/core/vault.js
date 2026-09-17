@@ -126,6 +126,7 @@ function candidates(alias) {
   const start = Math.floor(Date.now() / 60000) % primary.length;
   return [...primary.slice(start), ...primary.slice(0, start), ...rest];
 }
+function liveCount(alias) { const v = current(); if (!v) return 0; return ((v.upstreams || {})[alias] || []).filter((u) => u && u.url && u.key && u.model && !(disabled.get(u.id || u.key) > Date.now())).length; }
 function markBad(u, status) {
   const id = u.id || u.key;
   // 401/402/403 = dead or out of credit → rest 6 h; 429 = busy → 90 s; 5xx → 30 s
@@ -135,4 +136,4 @@ function markBad(u, status) {
 function isVaultModel(cfg) { return cfg && typeof cfg.model === 'string' && cfg.model.startsWith('orca/'); }
 function aliasOf(cfg) { return cfg.model.slice('orca/'.length); }
 
-module.exports = { keypair, seal, open, enabled, publicKey, refresh, current, status, candidates, markBad, isVaultModel, aliasOf, REPO };
+module.exports = { keypair, seal, open, enabled, publicKey, refresh, current, status, candidates, liveCount, markBad, isVaultModel, aliasOf, REPO };

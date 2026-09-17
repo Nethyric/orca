@@ -454,3 +454,15 @@ body.dragging::after{content:attr(data-drop);position:fixed;inset:12px;border:2p
 .pe-foot{display:flex;align-items:center;gap:8px}
 .pill.off{opacity:.55}
 .pill.err{color:var(--err)}
+
+/* ── task 12: interrupted answers, pins, notes, hidden system turns ── */
+.interrupted{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:10px;padding:8px 12px;border-radius:var(--r-sm);font-size:.88em;border:1px solid var(--line);background:var(--bg-2);color:var(--fg-2)}
+.interrupted svg{width:14px;height:14px;flex:none}.interrupted.err{border-color:rgba(255,95,126,.35);background:var(--err-bg);color:var(--err)}.interrupted.err>span{white-space:pre-wrap;word-break:break-word;max-width:100%}
+.interrupted .btn{padding:3px 10px;font-size:.92em;margin-inline-start:auto}.interrupted .btn+.btn{margin-inline-start:0}.interrupted .btn svg{width:12px;height:12px}
+.msg.user.pinned .bubble{box-shadow:inset 0 0 0 1px rgba(var(--acc-rgb),.55)}.lane.pinned{border-color:rgba(var(--acc-rgb),.45)}
+.msg-tools button.on,.lane-foot button.on{color:var(--acc)}.msg-tools button.danger:hover{color:var(--err);background:var(--err-bg)}
+.msg.hidden-sys{opacity:.7;align-self:center}.sysnote{display:inline-flex;gap:6px;align-items:center;font-size:.78em;color:var(--fg-3);padding:2px 10px;border:1px dashed var(--line);border-radius:999px}.sysnote svg{width:11px;height:11px}
+.notes-sec{padding:10px 12px;border-bottom:1px solid var(--line)}.notes-h{display:flex;gap:6px;align-items:center;font-size:.82em;font-weight:600;color:var(--fg-2);margin-bottom:8px}.notes-h svg{width:13px;height:13px}
+.pins{display:flex;flex-direction:column;gap:6px}.pin-item{display:flex;gap:8px;align-items:flex-start;padding:7px 9px;border-radius:var(--r-sm);background:var(--bg-2);border:1px solid var(--line);font-size:.82em;cursor:pointer}.pin-item:hover{border-color:rgba(var(--acc-rgb),.5)}.pin-item .txt{flex:1;color:var(--fg-1);line-height:1.45;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}.pin-item .x{opacity:.5}.pin-item:hover .x{opacity:1}
+.notes-ta{width:100%;min-height:160px;resize:vertical;background:var(--bg-2);border:1px solid var(--line);border-radius:var(--r-sm);color:var(--fg-0);padding:8px 10px;font:inherit;font-size:.86em;line-height:1.5}.notes-ta:focus{outline:none;border-color:rgba(var(--acc-rgb),.6)}
+#web-toggle.active{color:var(--acc);border-color:rgba(var(--acc-rgb),.5);background:rgba(var(--acc-rgb),.1)}

@@ -2,6 +2,7 @@
 // Rules: every key exists in `en`; other languages fall back to `en` for anything missing.
 (function () {
   const en = {
+    web: 'Web', tabNotes: 'Notes', pinnedMsgs: 'Pinned messages', chatNotes: 'Chat notes', notesPh: 'Decisions, terminology, constraints for this chat — the model always sees these.', noPins: 'Pin a message (📌 on hover) and it stays in the model\'s context no matter how long the chat gets.', pin: 'Pin', unpin: 'Unpin', pinnedMsg: 'Pinned — always in context', unpinnedMsg: 'Unpinned', fork: 'Branch', forked: 'Branched into a new chat', delMsg: 'Delete', delMsgQ: 'Delete this message (and its answers)?', continue: 'Continue', retry: 'Retry', stoppedPartial: 'Stopped — the answer is incomplete.', errGeneric: 'The response was interrupted.', continuedNote: 'continued automatically', busyRetry: 'The model is busy — retrying with another one', netErr: 'No connection to ORCA — check that the app is running', pasteSaved: 'Long text was saved to the workspace so the model can process it with tools.',
     doneInOtherChat: 'Finished a task in another chat', newChat: 'New chat', searchPh: 'Search conversations', leaderboard: 'Leaderboard', memory: 'Memory', settings: 'Settings', modeDirect: 'Chat', modeSide: 'Compare', modeBattle: 'Battle',
     heroTitle: 'What shall we build today?', tagline: 'Writes, runs, searches and debugs — right on this machine.', stop: 'Stop', plan: 'Plan', inputPh: 'Ask ORCA to do anything… (Shift+Enter for newline)',
     tabTimeline: 'Timeline', tabFiles: 'Files', tabChanges: 'Changes', tabPreview: 'Preview', openFolder: 'Open folder', save: 'Save', restoreAll: 'Restore all', emptyTimeline: 'Tools ORCA runs will be logged here.', footnote: 'ORCA can make mistakes — verify important output.',
@@ -15,6 +16,7 @@
   };
 
   const fa = {
+    web: 'وب', tabNotes: 'یادداشت', pinnedMsgs: 'پیام‌های سنجاق‌شده', chatNotes: 'یادداشت‌های این گفتگو', notesPh: 'تصمیم‌ها، اصطلاح‌ها و محدودیت‌های این گفتگو — مدل همیشه این‌ها را می‌بیند.', noPins: 'یک پیام را سنجاق کنید (📌 هنگام هاور) تا هرچقدر هم گفتگو طولانی شود، در حافظهٔ مدل بماند.', pin: 'سنجاق', unpin: 'برداشتن سنجاق', pinnedMsg: 'سنجاق شد — همیشه در حافظهٔ مدل', unpinnedMsg: 'سنجاق برداشته شد', fork: 'شاخه', forked: 'در یک گفتگوی جدید شاخه زده شد', delMsg: 'حذف', delMsgQ: 'این پیام (و پاسخ‌هایش) حذف شود؟', continue: 'ادامه بده', retry: 'دوباره', stoppedPartial: 'متوقف شد — پاسخ ناقص است.', errGeneric: 'پاسخ قطع شد.', continuedNote: 'به‌طور خودکار ادامه داده شد', busyRetry: 'مدل شلوغ است — با مدل دیگری تلاش می‌شود', netErr: 'ارتباط با ORCA برقرار نیست — مطمئن شوید برنامه اجراست', pasteSaved: 'متن طولانی در پوشهٔ کاری ذخیره شد تا مدل با ابزارها پردازشش کند.',
     doneInOtherChat: 'کار در گفتگوی دیگر تمام شد', newChat: 'گفتگوی جدید', searchPh: 'جست‌وجو در گفتگوها', leaderboard: 'رتبه‌بندی', memory: 'حافظه', settings: 'تنظیمات', modeDirect: 'گفتگو', modeSide: 'مقایسه', modeBattle: 'نبرد',
     heroTitle: 'امروز چه چیزی بسازیم؟', tagline: 'می‌نویسد، اجرا می‌کند، جست‌وجو می‌کند، اشکال‌زدایی می‌کند — روی همین سیستم.', stop: 'توقف', plan: 'نقشه', inputPh: 'از ORCA بخواه هر کاری انجام دهد… (Shift+Enter برای خط جدید)',
     tabTimeline: 'تایم‌لاین', tabFiles: 'فایل‌ها', tabChanges: 'تغییرات', tabPreview: 'پیش‌نمایش', openFolder: 'باز کردن پوشه', save: 'ذخیره', restoreAll: 'بازگردانی همه', emptyTimeline: 'ابزارهایی که ORCA اجرا می‌کند این‌جا ثبت می‌شوند.', footnote: 'ORCA می‌تواند اشتباه کند — خروجی‌های مهم را بررسی کنید.',
@@ -27,6 +29,7 @@
   };
 
   const ru = {
+    web: 'Веб', tabNotes: 'Заметки', pinnedMsgs: 'Закреплённые сообщения', chatNotes: 'Заметки чата', notesPh: 'Решения, термины, ограничения этого чата — модель всегда их видит.', noPins: 'Закрепите сообщение (📌 при наведении), и оно останется в контексте модели, каким бы длинным ни стал чат.', pin: 'Закрепить', unpin: 'Открепить', pinnedMsg: 'Закреплено — всегда в контексте', unpinnedMsg: 'Откреплено', fork: 'Ветка', forked: 'Создана ветка в новом чате', delMsg: 'Удалить', delMsgQ: 'Удалить это сообщение (и ответы на него)?', continue: 'Продолжить', retry: 'Повторить', stoppedPartial: 'Остановлено — ответ неполный.', errGeneric: 'Ответ был прерван.', continuedNote: 'продолжено автоматически', busyRetry: 'Модель занята — пробуем другую', netErr: 'Нет связи с ORCA — проверьте, что приложение запущено', pasteSaved: 'Длинный текст сохранён в рабочую папку, чтобы модель обработала его инструментами.',
     doneInOtherChat: 'Задача в другом чате завершена', newChat: 'Новый чат', searchPh: 'Поиск по чатам', leaderboard: 'Рейтинг', memory: 'Память', settings: 'Настройки', modeDirect: 'Чат', modeSide: 'Сравнение', modeBattle: 'Битва',
     heroTitle: 'Что создадим сегодня?', tagline: 'Пишет, запускает, ищет и отлаживает — прямо на этом компьютере.', stop: 'Стоп', plan: 'План', inputPh: 'Попросите ORCA сделать что угодно… (Shift+Enter — новая строка)',
     tabTimeline: 'Хроника', tabFiles: 'Файлы', tabChanges: 'Изменения', tabPreview: 'Предпросмотр', openFolder: 'Открыть папку', save: 'Сохранить', restoreAll: 'Восстановить всё', emptyTimeline: 'Здесь будут инструменты, которые запускает ORCA.', footnote: 'ORCA может ошибаться — проверяйте важные результаты.',
@@ -39,6 +42,7 @@
   };
 
   const zh = {
+    web: '联网', tabNotes: '笔记', pinnedMsgs: '置顶消息', chatNotes: '对话笔记', notesPh: '此对话的决定、术语和约束——模型始终可见。', noPins: '置顶一条消息（悬停时点 📌），无论对话多长它都会留在模型的上下文中。', pin: '置顶', unpin: '取消置顶', pinnedMsg: '已置顶——始终在上下文中', unpinnedMsg: '已取消置顶', fork: '分支', forked: '已分支到新对话', delMsg: '删除', delMsgQ: '删除这条消息（及其回答）？', continue: '继续', retry: '重试', stoppedPartial: '已停止——回答不完整。', errGeneric: '回答被中断。', continuedNote: '已自动继续', busyRetry: '模型繁忙——正在尝试其他模型', netErr: '无法连接 ORCA——请确认应用正在运行', pasteSaved: '长文本已保存到工作区，模型可用工具处理。',
     doneInOtherChat: '另一个对话中的任务已完成', newChat: '新对话', searchPh: '搜索对话', leaderboard: '排行榜', memory: '记忆', settings: '设置', modeDirect: '对话', modeSide: '对比', modeBattle: '对战',
     heroTitle: '今天想做点什么？', tagline: '编写、运行、搜索、调试 — 就在这台电脑上。', stop: '停止', plan: '计划', inputPh: '让 ORCA 做任何事… (Shift+Enter 换行)',
     tabTimeline: '时间线', tabFiles: '文件', tabChanges: '更改', tabPreview: '预览', openFolder: '打开文件夹', save: '保存', restoreAll: '全部还原', emptyTimeline: 'ORCA 运行的工具会记录在这里。', footnote: 'ORCA 可能会出错 — 请核对重要输出。',

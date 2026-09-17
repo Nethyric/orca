@@ -81,7 +81,7 @@ document.addEventListener('click', (e) => { const a = e.target.closest('a[href^=
 const detectDir = (s) => (/[\u0600-\u06FF]/.test(String(s).slice(0, 300)) ? 'rtl' : 'ltr');
 
 // ───────────────────────── state ─────────────────────────
-const S = { cfg: null, chats: [], chat: null, mode: 'direct', planMode: false, autonomy: 'auto', running: new Map(), lanes: new Map(), attach: [], allowAll: false, regenFrom: null, stepCount: 0 };
+const S = { webMode: false, cfg: null, chats: [], chat: null, mode: 'direct', planMode: false, autonomy: 'auto', running: new Map(), lanes: new Map(), attach: [], allowAll: false, regenFrom: null, stepCount: 0 };
 const toast = (m, k = '') => { const d = el('div', 'toast ' + k, (k === 'ok' ? ico('check') : k === 'err' ? ico('x') : '') + `<span>${esc(m)}</span>`); $('#toasts').appendChild(d); setTimeout(() => d.remove(), 3200); };
 const modelOf = (key) => S.cfg?.models.find((x) => x.key === key);
 
@@ -142,7 +142,7 @@ function setMode(m) { S.mode = m; $$('#mode-seg button').forEach((b) => b.classL
 $$('#mode-seg button').forEach((b) => (b.onclick = () => { if (runningHere()) return toast(t('running'), 'err'); if (S.chat && S.chat.messages.length && S.chat.mode !== b.dataset.mode) newChat(); setMode(b.dataset.mode); }));
 // runs that belong to the chat currently on screen (others keep streaming in the background and are re-rendered when you return)
 const runningHere = () => [...S.lanes.values()].some((L) => L.group && L.group.chatId === S.chat?.id && S.running.has(L.runId));
-function newChat() { S.chat = null; S.regenFrom = null; setBusy(false); $('#messages').innerHTML = ''; $('#welcome').classList.remove('hidden'); $('#tb-title').textContent = ''; $('#tab-timeline').innerHTML = `<div class="empty">${t('emptyTimeline')}</div>`; $('#changes-list').innerHTML = ''; $('#chg-badge').classList.add('hidden'); renderChatList(S.chats); $('#input').focus(); }
+function newChat() { S.chat = null; S.regenFrom = null; setBusy(false); refreshPins(); refreshNotes(); $('#messages').innerHTML = ''; $('#welcome').classList.remove('hidden'); $('#tb-title').textContent = ''; $('#tab-timeline').innerHTML = `<div class="empty">${t('emptyTimeline')}</div>`; $('#changes-list').innerHTML = ''; $('#chg-badge').classList.add('hidden'); renderChatList(S.chats); $('#input').focus(); }
 $('#new-chat').onclick = newChat;
 
 async function openChat(id, focusMsg) {
@@ -163,13 +163,14 @@ async function openChat(id, focusMsg) {
       else box.appendChild(renderGroup(group, c));
     }
   }
-  renderChatList(S.chats); refreshTimeline(); refreshChanges();
+  renderChatList(S.chats); refreshTimeline(); refreshChanges(); refreshPins(); refreshNotes();
   requestAnimationFrame(() => { const target = focusMsg && $(`[data-mid="${focusMsg}"]`); if (target) { target.scrollIntoView({ block: 'center' }); target.style.outline = '2px solid var(--acc)'; target.style.borderRadius = '12px'; setTimeout(() => (target.style.outline = ''), 1600); } else $('#thread').scrollTop = 1e9; });
 }
 
 // ───────────────────────── rendering ─────────────────────────
 function renderUser(m) {
-  const w = el('div', 'msg user'); w.dataset.mid = m.id;
+  const w = el('div', 'msg user' + (m.pinned ? ' pinned' : '')); w.dataset.mid = m.id;
+  if (m.hidden) { w.classList.add('hidden-sys'); w.innerHTML = `<div class="sysnote">${ico('refresh')}<span>${esc(t('continuedNote'))}</span></div>`; return w; }
   const shown = String(m.content || '').replace(/\n\n<attached_(file|image)[\s\S]*$/, '').replace(/<attached_image[\s\S]*?<\/attached_image>/g, '').trim();
   const imgs = m.images || [...String(m.content || '').matchAll(/<attached_image path="([^"]+)"/g)].map((x) => x[1]);
   if (imgs.length) { const g = el('div', 'msg-imgs'); imgs.forEach((p) => { const im = el('img'); im.src = wsUrl(p); im.alt = p; im.loading = 'lazy'; im.onclick = () => lightbox(wsUrl(p)); g.appendChild(im); }); w.appendChild(g); }
@@ -180,8 +181,30 @@ function renderUser(m) {
   const cp = el('button', '', ico('copy') + t('copy')); cp.onclick = () => { navigator.clipboard.writeText(shown); toast(t('copied'), 'ok'); };
   const ed = el('button', '', ico('edit') + t('edit')); ed.onclick = () => { $('#input').value = shown; autosize(); $('#input').focus(); S.regenFrom = m.id; };
   const rg = el('button', '', ico('refresh') + t('regen')); rg.onclick = () => send(m.content, m.id);
-  tools.append(cp, ed, rg); w.appendChild(tools);
+  const pn = el('button', m.pinned ? 'on' : '', ico('pin') + (m.pinned ? t('unpin') : t('pin'))); pn.onclick = () => togglePinMsg(m);
+  const fk = el('button', '', ico('branch') + t('fork')); fk.onclick = () => forkChat(m.id);
+  const dx = el('button', 'danger', ico('trash') + t('delMsg')); dx.onclick = () => deleteMsg(m.id);
+  tools.append(cp, ed, rg, pn, fk, dx); w.appendChild(tools);
+  if (m.pastedPath) { const chip = el('div', 'files'); chip.appendChild(el('span', 'filechip', ico('file') + esc(m.pastedPath.split('/').pop()) + ` · ${fmtB(String(m.content || '').length)}`)); w.appendChild(chip); const b = $('.bubble', w); if (String(m.content || '').length > 1500) { b.textContent = String(m.content).slice(0, 1500) + ' …'; b.title = t('pasteSaved'); } }
   return w;
+}
+async function togglePinMsg(m) {
+  const r = await api(`/api/chats/${S.chat.id}/messages/${m.id}`, { method: 'POST', body: { pinned: !m.pinned } });
+  if (r.error) return toast(r.error, 'err');
+  m.pinned = r.pinned; const w = $(`[data-mid="${m.id}"]`); if (w) w.classList.toggle('pinned', !!m.pinned);
+  const sm = S.chat.messages.find((x) => x.id === m.id); if (sm) sm.pinned = m.pinned;
+  toast(m.pinned ? t('pinnedMsg') : t('unpinnedMsg'), 'ok'); refreshPins(); if (w) { const btn = [...$$('.msg-tools button, .lane-foot button', w)].find((b) => b.textContent.trim() === t('pin') || b.textContent.trim() === t('unpin')); if (btn) { btn.innerHTML = ico('pin') + (m.pinned ? t('unpin') : t('pin')); btn.classList.toggle('on', !!m.pinned); } }
+}
+async function forkChat(messageId) {
+  if (!S.chat) return;
+  const c = await api(`/api/chats/${S.chat.id}/fork`, { method: 'POST', body: { messageId } });
+  if (c.error) return toast(c.error, 'err');
+  toast(t('forked'), 'ok'); await loadChats(); openChat(c.id);
+}
+async function deleteMsg(id) {
+  if (!confirm(t('delMsgQ'))) return;
+  await api(`/api/chats/${S.chat.id}/messages/${id}`, { method: 'DELETE' });
+  S.chat = await api('/api/chats/' + S.chat.id); openChat(S.chat.id); loadChats();
 }
 function laneEl(m, anon, idx) {
   const lane = el('div', 'lane'); lane.dataset.mid = m.id;
@@ -190,11 +213,43 @@ function laneEl(m, anon, idx) {
   lane.innerHTML = `<div class="lane-head"><span class="mname">${name}</span>${!anon && info?.vendor ? `<span class="vendor">${esc(info.vendor)}</span>` : ''}<span class="usage"></span></div>
     <details class="thought hidden"><summary>${ico('brain')}<span>${t('thoughts')}</span><span class="th-time"></span></summary><div class="th-body"></div></details>
     <div class="todos hidden"></div><div class="steps"></div><div class="content" dir="auto"></div><div class="outputs hidden"></div><div class="extra"></div>
-    <div class="lane-foot"><button class="cp">${ico('copy')}${t('copy')}</button><button class="rg">${ico('refresh')}${t('regen')}</button><button class="ex">${ico('download')}.md</button><span class="meta"></span></div>`;
-  $('.cp', lane).onclick = () => { navigator.clipboard.writeText($('.content', lane).textContent); toast(t('copied'), 'ok'); };
+    <div class="lane-foot"><button class="cp">${ico('copy')}${t('copy')}</button><button class="rg">${ico('refresh')}${t('regen')}</button><button class="pn${m.pinned ? ' on' : ''}">${ico('pin')}${m.pinned ? t('unpin') : t('pin')}</button><button class="fk">${ico('branch')}${t('fork')}</button><button class="ex">${ico('download')}.md</button><span class="meta"></span></div>`;
+  if (m.pinned) lane.classList.add('pinned');
+  $('.cp', lane).onclick = () => { navigator.clipboard.writeText(L_text(lane)); toast(t('copied'), 'ok'); };
+  $('.pn', lane).onclick = () => togglePinMsg(m);
+  $('.fk', lane).onclick = () => forkChat(m.id);
   $('.rg', lane).onclick = () => { const um = [...S.chat.messages].reverse().find((x) => x.role === 'user' && x.ts <= (m.ts || Infinity)); if (um) send(um.content, um.id); };
-  $('.ex', lane).onclick = () => dl('orca-answer.md', $('.content', lane).textContent);
+  $('.ex', lane).onclick = () => dl('orca-answer.md', L_text(lane));
   return lane;
+}
+// plain text of an answer for copy/export: the markdown source when we have it, else the rendered text
+const L_text = (lane) => { const m = S.chat && S.chat.messages.find((x) => x.id === lane.dataset.mid); return (m && m.content) || $('.content', lane).textContent; };
+// "Response interrupted" → continue (same turn, no new prompt) or retry (regenerate from the user message)
+function addInterruptedActions(lane, m) {
+  if ($('.interrupted', lane)) return;
+  const box = el('div', 'interrupted ' + (m.status === 'error' ? 'err' : 'stop'));
+  const partial = !!String(m.content || '').trim();
+  box.innerHTML = `${ico(m.status === 'error' ? 'x' : 'stop')}<span>${esc(m.status === 'error' ? (m.error || t('errGeneric')) : (partial ? t('stoppedPartial') : t('stopped')))}</span>${partial ? `<button class="btn btn-primary ct">${ico('play')}${t('continue')}</button>` : ''}<button class="btn rt">${ico('refresh')}${t('retry')}</button>`;
+  $('.rt', box).onclick = () => { const um = [...S.chat.messages].reverse().find((x) => x.role === 'user' && !x.hidden && x.ts <= (m.ts || Infinity)); if (um) send(um.content, um.id); };
+  if ($('.ct', box)) $('.ct', box).onclick = () => continueAnswer(m.id);
+  $('.extra', lane).appendChild(box);
+}
+async function continueAnswer(msgId) {
+  if (runningHere()) return toast(t('running'), 'err');
+  setBusy(true); $('#status-text').textContent = '…';
+  const body = { chatId: S.chat.id, continueFrom: msgId, mode: 'direct', model: $('#pick-single').value, autonomy: S.autonomy, lang, webMode: S.webMode };
+  const r = await api('/api/send', { method: 'POST', body });
+  if (r.error) { setBusy(false); return toast(r.error, 'err'); }
+  S.chat = await api('/api/chats/' + S.chat.id); openChat(S.chat.id);
+  const box = $('#messages');
+  const wrap = el('div', 'msg assistant'); const lanes = el('div', 'lanes'); wrap.appendChild(lanes); box.appendChild(wrap);
+  r.lanes.forEach((ln, i) => {
+    const m = { id: ln.msgId, lane: '', model: modelOf(r.models[i])?.label || r.models[i], modelKey: r.models[i], runId: ln.runId.split(':')[0], events: [], status: 'running' };
+    const l = laneEl(m, false, i); l.classList.add('streaming'); $('.content', l).classList.add('streaming'); lanes.appendChild(l);
+    S.lanes.set(ln.runId, { el: l, m, content: '', reasoning: '', steps: {}, wrap, group: { ...r, chatId: S.chat.id }, anon: false, t0: Date.now(), runId: ln.runId });
+    S.running.set(ln.runId, true);
+  });
+  $('#thread').scrollTop = 1e9;
 }
 function fillLane(lane, m) {
   if (m.reasoning) { const th = $('.thought', lane); th.classList.remove('hidden'); $('.th-body', th).textContent = m.reasoning; }
@@ -212,8 +267,7 @@ function fillLane(lane, m) {
   if (outs.length) renderOutputs(lane, outs);
   collapseSteps(steps);
   const c = $('.content', lane); c.innerHTML = md(m.content); c.dir = detectDir(m.content);
-  if (m.status === 'error') $('.extra', lane).appendChild(el('div', 'errbox', ico('x') + `<span>${esc(m.error || 'error')}</span>`));
-  if (m.status === 'stopped') $('.meta', lane).textContent = t('stopped');
+  if (m.status === 'error' || m.status === 'stopped') { addInterruptedActions(lane, m); if (m.status === 'stopped') $('.meta', lane).textContent = t('stopped'); }
   if (m.usage) $('.usage', lane).textContent = `${fmtN(m.usage.prompt_tokens)}↑ ${fmtN(m.usage.completion_tokens)}↓`;
   if (m.status === 'done' && PLAN_RE.test(m.content || '')) addPlanActions(lane);
 }
@@ -325,6 +379,24 @@ $('#send').onclick = () => (runningHere() ? stopAll() : send());
 $('#stop-btn').onclick = stopAll;
 $('#suggestions').onclick = (e) => { const s = e.target.closest('.sug'); if (s) { $('#input').value = s.dataset.p; autosize(); send(); } };
 $('#plan-toggle').onclick = () => { S.planMode = !S.planMode; $('#plan-toggle').classList.toggle('active', S.planMode); };
+$('#web-toggle').onclick = () => { S.webMode = !S.webMode; $('#web-toggle').classList.toggle('active', S.webMode); };
+// ── pins & notes panel ──
+function refreshPins() {
+  const box = $('#pins-list'); if (!box) return;
+  const pins = S.chat ? S.chat.messages.filter((m) => m.pinned) : [];
+  $('#pin-badge').textContent = pins.length; $('#pin-badge').classList.toggle('hidden', !pins.length);
+  box.innerHTML = '';
+  if (!pins.length) { box.appendChild(el('div', 'empty', t('noPins'))); return; }
+  for (const m of pins) {
+    const it = el('div', 'pin-item ' + m.role); it.innerHTML = `<span class="who">${m.role === 'user' ? '👤' : '🐋'}</span><span class="txt" dir="auto">${esc(String(m.content || '').replace(/\s+/g, ' ').slice(0, 220))}</span><button class="ib sm x" data-tip="${t('unpin')}">${ico('x')}</button>`;
+    it.onclick = (e) => { if (e.target.closest('.x')) return; const n = $(`[data-mid="${m.id}"]`); if (n) { n.scrollIntoView({ block: 'center', behavior: 'smooth' }); n.style.outline = '2px solid var(--acc)'; setTimeout(() => (n.style.outline = ''), 1400); } };
+    $('.x', it).onclick = (e) => { e.stopPropagation(); togglePinMsg(m); };
+    box.appendChild(it);
+  }
+}
+let notesTimer = null;
+function refreshNotes() { const ta = $('#chat-notes'); if (!ta) return; ta.value = (S.chat && S.chat.notes) || ''; ta.disabled = !S.chat; $('#notes-state').textContent = ''; }
+$('#chat-notes').oninput = () => { if (!S.chat) return; const v = $('#chat-notes').value; S.chat.notes = v; $('#notes-state').textContent = '…'; clearTimeout(notesTimer); notesTimer = setTimeout(async () => { await api('/api/chats/' + S.chat.id, { method: 'POST', body: { notes: v } }); $('#notes-state').textContent = t('saved'); setTimeout(() => ($('#notes-state').textContent = ''), 1500); }, 600); };
 $$('#autonomy button').forEach((b) => (b.onclick = () => { S.autonomy = b.dataset.a; $$('#autonomy button').forEach((x) => x.classList.toggle('active', x === b)); api('/api/config', { method: 'POST', body: { autonomy: S.autonomy } }); toast(b.dataset.tip); }));
 $('#attach-btn').onclick = () => $('#file-input').click();
 const isImg = (f) => /^image\//.test(f.type) || /\.(png|jpe?g|gif|webp|bmp)$/i.test(f.name || '');
@@ -384,9 +456,9 @@ async function send(textOverride, regenerateFrom) {
   if (regenerateFrom) { let n = $(`[data-mid="${regenerateFrom}"]`); while (n) { const nx = n.nextElementSibling; n.remove(); n = nx; } }
   box.appendChild(renderUser({ id: 'tmp-' + Date.now(), content: text, files, images: images.map((i) => i.path) }));
   setBusy(true); $('#status-text').textContent = '…'; S.stepCount = 0; $('#status-steps').textContent = ''; $('#thread').scrollTop = 1e9;
-  const body = { chatId: S.chat.id, text, mode: S.mode, model: $('#pick-single').value, models: [$('#pick-a').value, $('#pick-b').value], planMode: S.planMode, autonomy: S.autonomy, regenerateFrom, lang, images: images.map((i) => i.path) };
-  const r = await api('/api/send', { method: 'POST', body });
-  if (r.error) { setBusy(false); return toast(r.error, 'err'); }
+  const body = { chatId: S.chat.id, text, mode: S.mode, model: $('#pick-single').value, models: [$('#pick-a').value, $('#pick-b').value], planMode: S.planMode, autonomy: S.autonomy, regenerateFrom, lang, images: images.map((i) => i.path), webMode: S.webMode };
+  let r; try { r = await api('/api/send', { method: 'POST', body }); } catch (e) { r = { error: t('netErr') }; }
+  if (r.error) { setBusy(false); const tmp = $('#messages').lastElementChild; if (tmp && tmp.dataset.mid?.startsWith('tmp-')) tmp.remove(); if (textOverride == null) { $('#input').value = text; autosize(); } return toast(r.error, 'err'); }
   if (r.local) { setBusy(false); S.chat = await api('/api/chats/' + S.chat.id); openChat(S.chat.id); loadChats(); return; }
   const wrap = el('div', 'msg assistant'); const lanes = el('div', 'lanes' + (r.lanes.length === 2 ? ' two' : '')); wrap.appendChild(lanes); box.appendChild(wrap);
   const anon = S.mode === 'battle';
@@ -458,8 +530,8 @@ function handle(p) {
     case 'sub_event': addSubEvent(L.el, d); break;
     case 'compacted': toast(t('compacted'), 'ok'); break;
     case 'final': { L.content = d.text; const c = $('.content', L.el); c.innerHTML = md(d.text); c.dir = detectDir(d.text); c.classList.remove('streaming'); L.el.classList.remove('streaming'); const th = $('.thought', L.el); th.classList.remove('live'); th.open = false; if (!L.anon) $('.mname', L.el).innerHTML = `<img class="avatar" src="/assets/logo.png" alt="">${esc(d.model)}`; L.m.status = d.question ? 'question' : 'done'; L.m.model = d.model; if (PLAN_RE.test(d.text)) addPlanActions(L.el); $('.meta', L.el).textContent = ((Date.now() - L.t0) / 1000).toFixed(1) + 's'; break; }
-    case 'error': $('.extra', L.el).appendChild(el('div', 'errbox', ico('x') + `<span>${esc(d.text)}</span>`)); L.el.classList.add('error'); L.m.status = 'error'; break;
-    case 'stopped': $('.meta', L.el).textContent = t('stopped'); L.m.status = 'stopped'; break;
+    case 'error': { L.el.classList.add('error'); L.m.status = 'error'; L.m.error = d.text; L.m.content = L.content; if (/429|concurrency|rate/i.test(d.text)) toast(t('busyRetry'), 'err'); addInterruptedActions(L.el, L.m); break; }
+    case 'stopped': { $('.meta', L.el).textContent = t('stopped'); L.m.status = 'stopped'; L.m.content = L.content; addInterruptedActions(L.el, L.m); break; }
     case 'done': {
       $('.content', L.el).classList.remove('streaming'); L.el.classList.remove('streaming');
       S.running.delete(p.runId);
