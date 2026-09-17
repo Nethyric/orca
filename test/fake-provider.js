@@ -12,6 +12,8 @@ const scenarios = {
   nested2: { chunks: ['<think>The user is asking a simple trivia question. I know the answer directly.', '\n\n\nParis.', '<think>\nDirect answer to a simple factual question.</think>', ...Array.from({length: 60}, () => ' Paris. No further reasoning needed. The capital of France is Paris. Answered directly without tools. The user asked for one word.')], finish: 'length' },
   cut: { chunks: ['Here is a long answer that the proxy will cut ', 'in the middle of a sentence because of a 300 s limit and'], finish: null, noDone: true },
   length: { chunks: ['Part one of the answer, ', 'ends abruptly at the token cap'], finish: 'length' },
+  // a runaway write_file whose arguments never end (content first, no path) — the client must cut it and salvage
+  bigtool: { tool: 'write_file', argChunks: ['{"content": "# Big Tutorial\\n\\n', ...Array.from({ length: 400 }, (_, i) => `Paragraph ${i} of the tutorial with enough words to make it long and realistic.\\n`)], finish: null, noDone: true },
 };
 http.createServer((req, res) => {
   let body = ''; req.on('data', (d) => body += d); req.on('end', () => {
@@ -19,6 +21,11 @@ http.createServer((req, res) => {
     res.writeHead(200, { 'content-type': 'text/event-stream' });
     let i = 0;
     const tick = () => {
+      if (sc.tool) {
+        if (i === 0) res.write(`data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_big', type: 'function', function: { name: sc.tool, arguments: '' } }] }, finish_reason: null }] })}\n\n`);
+        if (i < sc.argChunks.length) { res.write(`data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: sc.argChunks[i++] } }] }, finish_reason: null }] })}\n\n`); setTimeout(tick, 5); return; }
+        return; // never finishes (proxy would cut it after minutes)
+      }
       if (i < sc.chunks.length) { res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: sc.chunks[i++] }, finish_reason: null }] })}\n\n`); setTimeout(tick, 30); }
       else { if (sc.finish) res.write(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: sc.finish }], usage: { prompt_tokens: 10, completion_tokens: 20 } })}\n\n`); if (!sc.noDone) res.write('data: [DONE]\n\n'); res.end(); }
     };
