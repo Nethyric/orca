@@ -271,6 +271,9 @@ function cutRepetition(text) {
 // glitch some free endpoints produce on trivial prompts. We ask the next model instead of showing it.
 function degenerate(text) {
   const t = String(text || '').trim(); if (!t || t.length > 1500) return false;
+  // a glitched sampler sometimes emits one long run of digits/symbols with no words at all ("7583100921064030118…")
+  if (t.length >= 80 && !/\s/.test(t) && !/[\p{L}]{2}/u.test(t)) return true;
+  if (t.length >= 120 && (t.match(/\d/g) || []).length / t.length > 0.9) return true;
   const words = t.toLowerCase().match(/[\p{L}\p{N}]+/gu) || []; if (words.length < 4) return false;
   const freq = new Map(); for (const w of words) freq.set(w, (freq.get(w) || 0) + 1);
   const [top, n] = [...freq.entries()].sort((a, b) => b[1] - a[1])[0];
