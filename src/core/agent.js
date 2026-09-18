@@ -72,6 +72,12 @@ function routeAuto({ text = '', history = [], planMode = false, hasFiles = false
 // Same decision with the decision engine when it is configured: a calibrated "what kind of request is this"
 // judgment replaces the keyword list (which misses "make the buttons blue" and over-triggers on "test").
 // Returns { key, kind, confidence }; falls back to routeAuto when the judge is off, unsure, or slow.
+async function classifyRequest(o) {
+  if (!judge.enabled()) return null;
+  const text = String(o.text || '').replace(/<attached_(file|image|text)[\s\S]*?<\/attached_\1>/g, '[attachment]');
+  const recent = (o.history || []).slice(-2).map((m) => `${m.role}: ${String(m.content || '').slice(0, 300)}`);
+  return judge.intent(text, recent).catch(() => null);
+}
 async function routeAutoJudged(o) {
   const fallback = routeAuto(o);
   if (!judge.enabled()) return { key: fallback, kind: null };
@@ -82,9 +88,7 @@ async function routeAutoJudged(o) {
   if (!strong || !fast || strong.key === fast.key) return { key: fallback, kind: null };
   if (!live(fast) && live(strong)) fast = strong;
   if (!live(strong) && live(fast)) strong = fast;
-  const text = String(o.text || '').replace(/<attached_(file|image|text)[\s\S]*?<\/attached_\1>/g, '[attachment]');
-  const recent = o.history.slice(-2).map((m) => `${m.role}: ${String(m.content || '').slice(0, 300)}`);
-  const r = await judge.intent(text, recent).catch(() => null);
+  const r = o.cls !== undefined ? o.cls : await classifyRequest(o);
   if (!r || r.confidence < 0.55) return { key: fallback, kind: r && r.kind };
   if (o.planMode || o.hasFiles) return { key: strong.key, kind: r.kind, confidence: r.confidence };
   return { key: r.kind === 'light' ? fast.key : strong.key, kind: r.kind, confidence: r.confidence };
@@ -1059,4 +1063,4 @@ async function anthropicOnce(cfg, messages, onDelta, ctl, kick, useTools, temper
   return { content, reasoning, tool_calls: calls, usage, finish: finish === 'max_tokens' ? 'length' : finish };
 }
 
-module.exports = { runAgent, stopRun, approve, quick, compact, systemPrompt, splitReasoning, routeAuto, routeAutoJudged, fitContext, salvageArgs };
+module.exports = { runAgent, stopRun, approve, quick, compact, systemPrompt, splitReasoning, routeAuto, routeAutoJudged, classifyRequest, capabilityReport, fitContext, salvageArgs };

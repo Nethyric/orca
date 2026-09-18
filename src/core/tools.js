@@ -409,7 +409,7 @@ const SCHEMAS = [
   { type: 'function', function: { name: 'ask_user', description: 'Pause and ask the user a clarifying question when the request is genuinely ambiguous. Provide 2-4 short options when possible. The run stops until they answer.', parameters: { type: 'object', properties: { question: { type: 'string' }, options: { type: 'array', items: { type: 'string' } } }, required: ['question'] } } },
 ];
 
-const DANGEROUS = /\b(rm\s+-rf|Remove-Item[^\n]*-Recurse|del\s+\/[sq]|rmdir\s+\/s|format\s+[a-z]:|mkfs|dd\s+if=|shutdown|reboot|Restart-Computer|Stop-Computer|:\(\)\s*\{|>\s*\/dev\/sd|diskpart|reg\s+delete|git\s+push\s+--force|git\s+reset\s+--hard|sudo\s+rm|chmod\s+-R\s+777\s+\/)/i;
+const DANGEROUS = /\b(rm\s+-rf|Remove-Item[^\n]*-Recurse|del\s+\/[sq]|rmdir\s+\/s|format\s+[a-z]:|mkfs|dd\s+if=|shutdown|reboot|Restart-Computer|Stop-Computer|:\(\)\s*\{|>\s*\/dev\/sd|diskpart|reg\s+delete|git\s+push\s+--force|git\s+reset\s+--hard|git\s+(checkout|restore)\s+(--\s+)?\.(\s|$)|git\s+clean\s+-\w*f|sudo\s+rm|chmod\s+-R\s+777\s+\/)/i;
 SCHEMAS.push(...office.SCHEMAS, ...extras.SCHEMAS);
 
 function riskOf(name, args) {

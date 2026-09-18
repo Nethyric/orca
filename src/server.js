@@ -7,7 +7,7 @@ const { URL } = require('url');
 const config = require('./core/config');
 const store = require('./core/store');
 const tools = require('./core/tools');
-const { runAgent, stopRun, approve, quick, routeAuto, routeAutoJudged, compact } = require('./core/agent');
+const { runAgent, stopRun, approve, quick, routeAuto, routeAutoJudged, classifyRequest, compact } = require('./core/agent');
 const judge = require('./core/judge');
 const remote = require('./core/remote');
 const vault = require('./core/vault');
@@ -239,11 +239,16 @@ async function handleApi(req, res, url) {
     const lanes = [];
     if (body.lang && ['fa', 'en'].includes(body.lang) && body.lang !== cfg.lang) config.save({ lang: body.lang });
     let chosen = model || cfg.defaultModel;
+    // decision engine (optional): one calibrated "what kind of request is this" judgment drives auto-routing and turns
+    // research mode on for questions that need live information, even when the user did not press the web toggle
+    const cls = body._hidden ? null : await classifyRequest({ text: String(text || ''), history });
+    if (cls && cls.kind === 'research' && cls.confidence >= 0.85 && !planMode) webMode = true;
     if (mode === 'direct') {
-      if (chosen === 'auto') { const r = await routeAutoJudged({ text: String(text || ''), history, planMode, hasFiles: /<attached_(file|image)/.test(String(text || '')) }); chosen = r.key; if (r.kind) body._routed = r; }
+      if (chosen === 'auto') { const r = await routeAutoJudged({ text: String(text || ''), history, planMode, hasFiles: /<attached_(file|image)/.test(String(text || '')), cls }); chosen = r.key; }
       lanes.push(startLane({ chatId, runId, lane: '', modelKey: chosen, history, planMode, autonomy, webMode, notes, pinned }));
     } else {
       let pair = (models.length === 2 ? models : cfg.compareModels).map((k) => (k === 'auto' ? routeAuto({ text: String(text || ''), history, planMode }) : k));
+      if (pair.includes('auto') || (models.length === 2 ? models : cfg.compareModels).includes('auto')) { const r = await routeAutoJudged({ text: String(text || ''), history, planMode, cls }); pair = pair.map((k, i) => ((models.length === 2 ? models : cfg.compareModels)[i] === 'auto' ? r.key : k)); }
       if (mode === 'battle') { const pool = config.allModels().filter((x) => config.resolve(x.key)?.apiKey).map((x) => x.key); pair = pool.sort(() => Math.random() - 0.5).slice(0, 2); if (pair.length < 2) pair = [cfg.defaultModel, cfg.defaultModel]; }
       store.updateChat(chatId, { mode, models: pair });
       const laneHistory = (lane) => fresh.messages.filter((x) => x.role === 'user' || (x.role === 'assistant' && (x.lane === lane || !x.lane)));
