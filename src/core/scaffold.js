@@ -283,7 +283,7 @@ loadData('records').then((rows) => {
 }
 
 const KIND_RE = [
-  [/^(home|index|landing|main|خانه|صفحه اصلی|главная|首页)$/i, 'home'],
+  [/(^|\s)(home|index|landing|main|خانه|صفحه اصلی|главная|首页)(\s|$)/i, 'home'],
   [/(shop|store|catalog|products?|menu|courses?|portfolio|gallery|services?|pricing|فروشگاه|محصول|منو|خدمات|دوره|نمونه.?کار|قیمت|магазин|каталог|товар|меню|услуг|商店|产品|菜单|服务)/i, 'catalog'],
   [/(cart|basket|checkout|سبد|پرداخت|корзин|购物车|结账)/i, 'cart'],
   [/(contact|book|reserv|order|signup|register|apply|تماس|رزرو|سفارش|ثبت.?نام|درخواست|контакт|брон|заказ|регистр|联系|预订|订单|注册)/i, 'contact'],
@@ -303,9 +303,18 @@ function scaffold({ root, dir = '.', name = 'My Site', tagline = '', lang = 'en'
   fs.mkdirSync(dirAbs, { recursive: true });
   const dirTag = RTL.has(lang) ? 'rtl' : 'ltr';
   const pal = PALETTES[accent] || PALETTES.indigo;
+  // models often pass English keywords as page titles for a non-English site ("home", "menu"): label the nav in the site's language
+  const LABELS = {
+    fa: { home: 'خانه', index: 'خانه', menu: 'منو', shop: 'فروشگاه', store: 'فروشگاه', products: 'محصولات', catalog: 'کاتالوگ', services: 'خدمات', pricing: 'قیمت‌ها', portfolio: 'نمونه‌کارها', gallery: 'گالری', courses: 'دوره‌ها', blog: 'وبلاگ', cart: 'سبد خرید', checkout: 'پرداخت', contact: 'تماس با ما', reservation: 'رزرو میز', booking: 'رزرو', order: 'سفارش', signup: 'ثبت‌نام', register: 'ثبت‌نام', login: 'ورود', about: 'درباره ما', team: 'تیم ما', faq: 'سوالات متداول', dashboard: 'داشبورد', admin: 'مدیریت' },
+    ru: { home: 'Главная', index: 'Главная', menu: 'Меню', shop: 'Магазин', store: 'Магазин', products: 'Товары', catalog: 'Каталог', services: 'Услуги', pricing: 'Цены', portfolio: 'Портфолио', gallery: 'Галерея', courses: 'Курсы', blog: 'Блог', cart: 'Корзина', checkout: 'Оформление', contact: 'Контакты', reservation: 'Бронирование', booking: 'Бронирование', order: 'Заказ', signup: 'Регистрация', register: 'Регистрация', login: 'Вход', about: 'О нас', team: 'Команда', faq: 'Вопросы', dashboard: 'Панель', admin: 'Админ' },
+    zh: { home: '首页', index: '首页', menu: '菜单', shop: '商店', store: '商店', products: '产品', catalog: '目录', services: '服务', pricing: '价格', portfolio: '作品', gallery: '画廊', courses: '课程', blog: '博客', cart: '购物车', checkout: '结账', contact: '联系我们', reservation: '预订', booking: '预订', order: '订单', signup: '注册', register: '注册', login: '登录', about: '关于我们', team: '团队', faq: '常见问题', dashboard: '仪表盘', admin: '管理' },
+  };
+  const labels = LABELS[String(lang || 'en').slice(0, 2).toLowerCase()] || null;
   const norm = pages.map((p, i) => {
     const o = typeof p === 'string' ? { title: p } : { ...p };
-    const k = i === 0 && !o.kind && !o.file ? 'home' : kindOf(o.file || o.title, o.kind);
+    o.title = String(o.title || '').trim() || 'Page';
+    if (labels && /^[a-z][a-z -]{1,20}$/i.test(o.title)) { const key = o.title.toLowerCase().replace(/\s+/g, ''); const l = labels[key] || labels[key.replace(/s$/, '')]; if (l) { o.file = o.file || (i === 0 ? 'index.html' : slug(o.title) + '.html'); o.title = l; } }
+    const k = i === 0 && !o.kind && (!o.file || o.file === 'index.html') ? 'home' : kindOf(o.kind ? '' : (o.file || '').replace(/\.html$/, '') + ' ' + o.title, o.kind);
     const latin = String(o.title).replace(/[^\x00-\x7F]+/g, '').trim();
     o.file = o.file || (k === 'home' ? 'index.html' : (latin ? slug(latin) : k) + '.html'); // non-Latin titles → file named after the page kind (menu → catalog.html)
     if (!/\.html$/.test(o.file)) o.file += '.html'; o.kind = k; return o;
