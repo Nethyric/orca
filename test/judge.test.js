@@ -139,6 +139,18 @@ const fakeChat = http.createServer((req, res) => {
     check('agent-without-judge', r.text === 'Plain answer.', JSON.stringify(r.text));
   }
   { const p = path.join(config.workspaceDir(), 'out.txt'); check('file-written', fs.existsSync(p), p); }
+  { // scaffold_site: kinds inferred from Persian titles, RTL, data works from file://, no leftovers outside dir
+    const r = await tools.callTool('scaffold_site', { dir: 'site', name: 'کافه نیلو', tagline: 'قهوهٔ تازه', lang: 'fa', theme: 'light', accent: 'amber', pages: ['خانه', 'منو', 'سبد خرید', 'درباره ما', 'رزرو میز', 'داشبورد'] });
+    const kinds = (r.pages || []).map((p) => p.file + ':' + p.kind).join(' ');
+    const idx = fs.readFileSync(path.join(config.workspaceDir(), 'site', 'index.html'), 'utf8');
+    const cat = fs.readFileSync(path.join(config.workspaceDir(), 'site', 'catalog.html'), 'utf8');
+    check('scaffold-kinds', kinds === 'index.html:home catalog.html:catalog cart.html:cart about.html:about contact.html:contact dashboard.html:dashboard', kinds);
+    check('scaffold-rtl+data', /dir="rtl"/.test(idx) && /data\/items\.js/.test(cat) && fs.existsSync(path.join(config.workspaceDir(), 'site', 'data', 'items.json')) && r.todo_markers.length > 3, `todos=${r.todo_markers.length}`);
+    const again = await tools.callTool('scaffold_site', { dir: 'site', name: 'x', pages: ['Home'] });
+    check('scaffold-no-overwrite', again.skipped.includes('index.html') && again.written.length === 0, `skipped=${again.skipped.length}`);
+    const outside = await tools.callTool('scaffold_site', { dir: '../../outside', name: 'x', pages: ['Home'] });
+    check('scaffold-jail', !!outside.error, String(outside.error).slice(0, 60));
+  }
 
   fakeChat.close();
   try { fs.rmSync(DATA, { recursive: true, force: true }); } catch (_) {}

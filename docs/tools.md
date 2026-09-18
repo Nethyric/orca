@@ -321,6 +321,25 @@ Risk: `low`
 |---|---|---|
 | `overwrite` | boolean |  |
 
+### `scaffold_site`
+
+Generate a complete, responsive multi-page website skeleton in one call: `style.css` with design tokens (`:root` variables for colours, radii, shadow, font), `main.js` (mobile nav, active link, `toast()`, `loadData(name)`, a localStorage `cart`, `<form data-validate>` validation), one HTML + JS file per page with header/nav/hero/sections/footer already wired, `data/<name>.js` + `.json` content files and a README. Pages work from `file://` (no server needed). Page kinds are inferred from the title in English, Persian, Russian or Chinese (home, catalog/shop/menu, cart, contact/booking, about, dashboard) or set explicitly. Every placeholder is a `TODO` marker; the result lists how many remain per file. Persian/Arabic content switches the site to RTL with a matching font stack.
+
+Risk: `low`
+
+| Parameter | Type | Description |
+|---|---|---|
+| `name` * | string | Site/brand name |
+| `pages` * | array | Ordered pages: `"Title"` or `{ title, file?, kind? }` with `kind` in `home` `catalog` `cart` `contact` `about` `dashboard` `generic` |
+| `dir` | string | Target folder inside the workspace (default `.`) |
+| `tagline` | string | Used in the hero and meta description |
+| `lang` | string | Content language code (`en`, `fa`, `ru`, `zh`, …); `fa`/`ar` → `dir="rtl"` |
+| `theme` | string: `dark` `light` | Default `dark` |
+| `accent` | string: `indigo` `violet` `cyan` `emerald` `amber` `rose` `slate` | Accent colour |
+| `overwrite` | boolean | Overwrite existing files (default: existing files are skipped and listed) |
+
+Returns `{ dir, pages: [{ title, file, kind }], written, skipped, todo_markers, next }`.
+
 ## Office documents
 
 ### `write_docx`

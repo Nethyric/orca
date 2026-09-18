@@ -28,7 +28,7 @@
 
 ORCA is a desktop agent that plans, writes code, runs it, reads the errors and fixes them — on your machine, in your files. It ships with built-in models that work out of the box, and connects to 200+ providers or any OpenAI‑compatible endpoint with your own key.
 
-- **Autonomous by default.** 41 real tools: shell, Node/Python, file editing, web search, HTTP, headless-browser checks, Office documents, media, OCR, image and video generation, sub‑agents.
+- **Autonomous by default.** 42 real tools: shell, Node/Python, file editing, web search, HTTP, headless-browser checks, Office documents, media, OCR, image and video generation, sub‑agents.
 - **Any model.** Built-in models with automatic failover, plus your own providers (cloud or local). Keys never leave your device.
 - **Knows what it can do.** Ask "what can you do?" and the answer is generated from a live capability check of your installation — connected models, present binaries, enabled engines — not from a canned list.
 - **Decision engine (optional).** Plug in a System One model and ORCA gets calibrated judgments in ~0.2 s: smarter auto-routing, semantic command-risk review, verification of every answer (garbled, promised-but-not-done, wrong language), re-ranked web results.
@@ -69,7 +69,7 @@ Anthropic-style and OpenAI-style APIs are both supported, as are local servers (
 | [Setup](docs/setup.md) | Install, build from source, data folder, environment variables |
 | [Configuration](docs/configuration.md) | Every `config.json` key, rules, persona, autonomy |
 | [Providers](docs/providers.md) | Adding providers and models, local models, troubleshooting keys |
-| [Tools](docs/tools.md) | Reference for all 41 agent tools |
+| [Tools](docs/tools.md) | Reference for all 42 agent tools |
 | [HTTP API](docs/api.md) | The local REST + SSE API used by the UI (and usable by scripts) |
 | [Built-in models & the vault](docs/vault.md) | How built-in keys are shipped, rotated and protected |
 | [Decision engine](docs/decision-engine.md) | Optional System One model for routing, command-risk review, answer verification and search re-ranking |
