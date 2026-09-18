@@ -271,6 +271,16 @@ const impl = {
   async web_search({ query, count = 6 }) {
     count = Math.min(Math.max(+count || 6, 1), 10);
     const errors = [];
+    if (config.load().braveApiKey) {
+      // Official Brave Search API when a key is present — deterministic, not blocked from datacenter IPs.
+      try {
+        const r = await fetchText('https://api.search.brave.com/res/v1/web/search?q=' + encodeURIComponent(query) + '&count=' + count, { headers: { 'x-subscription-token': config.load().braveApiKey, accept: 'application/json' } }, 10000);
+        const j = JSON.parse(r.text);
+        const web = (j.web && j.web.results) || [];
+        if (web.length) return { engine: 'brave-api', results: web.slice(0, count).map((x) => ({ title: x.title, url: x.url, snippet: (x.description || '').slice(0, 320) })) };
+        errors.push('brave-api: 0 results');
+      } catch (e) { errors.push('brave-api: ' + (e.message || e)); }
+    }
     const ddg = async () => {
       const r = await fetchText('https://lite.duckduckgo.com/lite/?q=' + encodeURIComponent(query), {}, 12000);
       if (r.status === 202 || r.status === 429) throw new Error('ddg ' + r.status);
@@ -339,7 +349,7 @@ const impl = {
     try {
       if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
       const r = await fetchText(url, {}, 30000);
-      if (/json/.test(r.ct)) return { url, status: r.status, text: r.text.slice(0, max_chars) };
+      if (/json/.test(r.ct)) return { url, status: r.status, untrusted: true, text: r.text.slice(0, max_chars) };
       let html = r.text;
       const title = strip((html.match(/<title[^>]*>([\s\S]*?)<\/title>/i) || [])[1] || '');
       html = html.replace(/<(script|style|noscript|svg|nav|footer|header|iframe|form)[\s\S]*?<\/\1>/gi, ' ');
@@ -349,7 +359,7 @@ const impl = {
       const text = body.replace(/<[^>]+>/g, ' ').replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#x27;|&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&nbsp;/g, ' ')
         .split('\n').map((l) => l.replace(/\s+/g, ' ').trim()).filter(Boolean).join('\n');
       const links = [...html.matchAll(/<a[^>]*href=["'](https?:\/\/[^"'#]+)["'][^>]*>([\s\S]*?)<\/a>/g)].map((m) => ({ text: strip(m[2]).slice(0, 60), url: m[1] })).filter((l) => l.text).slice(0, 25);
-      return { url, status: r.status, title, text: text.slice(0, max_chars), truncated: text.length > max_chars, links };
+      return { url, status: r.status, untrusted: true, title, text: text.slice(0, max_chars), truncated: text.length > max_chars, links };
     } catch (e) { return { error: String(e.message || e) }; }
   },
 
@@ -357,7 +367,7 @@ const impl = {
     try {
       const r = await fetch(url, { method, headers: { 'user-agent': UA, ...headers }, body: body != null ? (typeof body === 'string' ? body : JSON.stringify(body)) : undefined });
       const text = await r.text();
-      return { status: r.status, headers: Object.fromEntries([...r.headers.entries()].slice(0, 20)), body: text.slice(0, 20000) };
+      return { status: r.status, untrusted: true, headers: Object.fromEntries([...r.headers.entries()].slice(0, 20)), body: text.slice(0, 20000) };
     } catch (e) { return { error: e.message }; }
   },
 
@@ -420,11 +430,15 @@ const SCHEMAS = [
   { type: 'function', function: { name: 'list_processes', description: 'List background processes started in this session with status, uptime and open ports.', parameters: { type: 'object', properties: {} } } },
 ];
 
-const DANGEROUS = /\b(rm\s+-rf|Remove-Item[^\n]*-Recurse|del\s+\/[sq]|rmdir\s+\/s|format\s+[a-z]:|mkfs|dd\s+if=|shutdown|reboot|Restart-Computer|Stop-Computer|:\(\)\s*\{|>\s*\/dev\/sd|diskpart|reg\s+delete|git\s+push\s+--force|git\s+reset\s+--hard|git\s+(checkout|restore)\s+(--\s+)?\.(\s|$)|git\s+clean\s+-\w*f|sudo\s+rm|chmod\s+-R\s+777\s+\/)/i;
+const DANGEROUS = /\b(rm\s+-rf|Remove-Item[^\n]*-Recurse|del\s+\/[sq]|rmdir\s+\/s|format\s+[a-z]:|mkfs|dd\s+if=|shutdown|reboot|Restart-Computer|Stop-Computer|diskpart|reg\s+delete|git\s+push\s+--force|git\s+reset\s+--hard|git\s+(checkout|restore)\s+(--\s+)?\.(\s|$)|git\s+clean\s+-\w*f|sudo\s+rm|chmod\s+-R\s+777\s+\/|(curl|wget)[^\n|;]*\|\s*(sudo\s+)?(ba|z|da)?sh|find\s+[^;\n]*-delete|shutil\.rmtree|os\.system\s*\(|eval\s*\(\s*(base64|atob|exec)|Invoke-Expression|iex\s+\(|icacls[^\n]*\/grant[^\n]*Everyone|schtasks[^\n]*\/create|regsvr32[^\n]*\/s[^\n]*http|xargs[^\n]*rm\s+-rf)/i;
+const DANGEROUS_RAW = /(:\(\)\s*\{|>\s*\/(dev\/sd[a-z]?|etc\/(passwd|shadow|sudoers))|mkfs\.\w+|\.\.\/\.\.\/[^\n]*(passwd|shadow))/i;
 SCHEMAS.push(...office.SCHEMAS, ...extras.SCHEMAS);
 
 function riskOf(name, args) {
-  if (name === 'run_shell' || name === 'start_process') return DANGEROUS.test(args.command || '') ? 'high' : 'medium';
+  if (name === 'run_shell' || name === 'start_process') {
+    const cmd = String(args.command || '');
+    return (DANGEROUS.test(cmd) || DANGEROUS_RAW.test(cmd)) ? 'high' : 'medium';
+  }
   if (name === 'stop_process' || name === 'process_output' || name === 'list_processes') return 'none';
   if (name === 'delete_file') return 'medium';
   if (name === 'run_python' || name === 'run_node') return 'low';

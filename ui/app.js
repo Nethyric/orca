@@ -6,7 +6,10 @@ const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const el = (tag, cls, html) => { const e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; };
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const ico = (name, cls = '') => `<svg class="${cls}"><use href="#i-${name}"/></svg>`;
-const api = async (p, o = {}) => { const r = await fetch(p, { headers: { 'content-type': 'application/json' }, ...o, body: o.body ? JSON.stringify(o.body) : undefined }); return r.json(); };
+const TOK = window.__ORCA_TOKEN__ || '';
+const authHdr = () => (TOK ? { 'x-orca-token': TOK } : {});
+const authQs = (p) => (TOK ? p + (p.includes('?') ? '&' : '?') + 'token=' + TOK : p);
+const api = async (p, o = {}) => { const r = await fetch(p, { headers: { 'content-type': 'application/json', ...authHdr() }, ...o, body: o.body ? JSON.stringify(o.body) : undefined }); return r.json(); };
 const desktop = window.orcaDesktop || null;
 if (!desktop) document.body.classList.add('web');
 const PLAN_RE = /اجرا\s*کنم\s*[؟?:]?\s*$|Shall I (execute|proceed)\??\s*$|Выполнить\??\s*$|要执行吗[？?]?\s*$/m;
@@ -414,13 +417,13 @@ async function addFiles(files) {
     const name = f.name || (isImg(f) ? 'pasted-' + Date.now() + '.png' : 'pasted.txt');
     if (isImg(f)) {
       const a = { name, kind: 'image', url: URL.createObjectURL(f), uploading: true }; S.attach.push(a); renderAttach();
-      try { const r = await fetch('/api/upload?name=' + encodeURIComponent(name), { method: 'POST', body: f }); const j = await r.json(); if (j.error) throw new Error(j.error); a.path = j.path; a.analysis = j.analysis; a.uploading = false; if (!S._imgHintShown) { S._imgHintShown = true; if (!S.cfg?.visionOn) toast(t('imgHint')); } }
+      try { const r = await fetch(authQs('/api/upload?name=' + encodeURIComponent(name)), { method: 'POST', body: f }); const j = await r.json(); if (j.error) throw new Error(j.error); a.path = j.path; a.analysis = j.analysis; a.uploading = false; if (!S._imgHintShown) { S._imgHintShown = true; if (!S.cfg?.visionOn) toast(t('imgHint')); } }
       catch (e) { toast(name + ': ' + e.message, 'err'); S.attach.splice(S.attach.indexOf(a), 1); }
       renderAttach();
     } else if (f.size > 2e6 || /\.(zip|exe|dll|mp4|mp3|mov|pdf|docx|xlsx|pptx|bin)$/i.test(name)) {
       // binary/big files go to the workspace so the agent can open them with its tools
       const a = { name, kind: 'file', uploading: true }; S.attach.push(a); renderAttach();
-      try { const r = await fetch('/api/upload?name=' + encodeURIComponent(name), { method: 'POST', body: f }); const j = await r.json(); if (j.error) throw new Error(j.error); a.path = j.path; a.uploading = false; a.text = j.text || ''; }
+      try { const r = await fetch(authQs('/api/upload?name=' + encodeURIComponent(name)), { method: 'POST', body: f }); const j = await r.json(); if (j.error) throw new Error(j.error); a.path = j.path; a.uploading = false; a.text = j.text || ''; }
       catch (e) { toast(name + ': ' + e.message, 'err'); S.attach.splice(S.attach.indexOf(a), 1); }
       renderAttach();
     } else S.attach.push({ name, kind: 'text', text: await f.text() });
@@ -458,7 +461,7 @@ async function send(textOverride, regenerateFrom) {
   if (S.attach.some((a) => a.uploading)) return toast(t('uploading'));
   // local slash commands
   const sc = text.match(/^\/(plan|model|export|clear|files|new|help)\b\s*(.*)$/i);
-  if (sc && textOverride == null) { $('#input').value = ''; autosize(); const c = sc[1].toLowerCase(); if (c === 'help') showHelp(sc[2].trim() === 'commands' ? 'cmds' : undefined); else if (c === 'plan') $('#plan-toggle').click(); else if (c === 'model') { const k = sc[2].trim().toLowerCase(); const m = S.cfg.models.find((x) => x.key === k || x.label.toLowerCase().includes(k)); if (m) { buildPicker($('#pick-single'), m.key, (v) => api('/api/config', { method: 'POST', body: { defaultModel: v } })); api('/api/config', { method: 'POST', body: { defaultModel: m.key } }); toast(m.label, 'ok'); } else toast(S.cfg.models.map((x) => x.key).join(', ')); } else if (c === 'export') { if (S.chat) { const r = await fetch('/api/chats/' + S.chat.id + '/export'); dl('orca-chat.md', await r.text()); } } else if (c === 'clear' || c === 'new') newChat(); else if (c === 'files') { openPanel(); showTab('files'); } return; }
+  if (sc && textOverride == null) { $('#input').value = ''; autosize(); const c = sc[1].toLowerCase(); if (c === 'help') showHelp(sc[2].trim() === 'commands' ? 'cmds' : undefined); else if (c === 'plan') $('#plan-toggle').click(); else if (c === 'model') { const k = sc[2].trim().toLowerCase(); const m = S.cfg.models.find((x) => x.key === k || x.label.toLowerCase().includes(k)); if (m) { buildPicker($('#pick-single'), m.key, (v) => api('/api/config', { method: 'POST', body: { defaultModel: v } })); api('/api/config', { method: 'POST', body: { defaultModel: m.key } }); toast(m.label, 'ok'); } else toast(S.cfg.models.map((x) => x.key).join(', ')); } else if (c === 'export') { if (S.chat) { const r = await fetch('/api/chats/' + S.chat.id + '/export', { headers: authHdr() }); dl('orca-chat.md', await r.text()); } } else if (c === 'clear' || c === 'new') newChat(); else if (c === 'files') { openPanel(); showTab('files'); } return; }
   const files = S.attach.filter((a) => a.kind !== 'image').map((a) => a.name);
   const images = S.attach.filter((a) => a.kind === 'image' && a.path).map((a) => ({ path: a.path, url: a.url }));
   if (S.attach.length) {
@@ -495,7 +498,7 @@ async function stopAll() { const ids = [...S.lanes.values()].filter((L) => L.gro
 
 // ───────────────────────── SSE ─────────────────────────
 function connect() {
-  const es = new EventSource('/api/events');
+  const es = new EventSource(authQs('/api/events'));
   es.onmessage = (e) => { let p; try { p = JSON.parse(e.data); } catch (_) { return; } handle(p); };
   es.onerror = () => { $('#tb-status').className = 'dot'; };
   es.onopen = () => { $('#tb-status').className = S.running.size ? 'dot busy' : 'dot on'; };
@@ -636,9 +639,10 @@ function showApproval(L, runId, d) {
   if (S.allowAll) { api('/api/approve', { method: 'POST', body: { runId, callId: d.id, decision: 'allow' } }); return; }
   const a = el('div', 'approval ' + d.risk);
   const cmd = (d.name === 'run_shell' ? d.args.command : JSON.stringify(d.args, null, 2)) + (d.judged ? `\n\n⚠ decision engine: ${Math.round(d.judged * 100)}% destructive` : '');
-  a.innerHTML = `<div class="ap-head">${ico('shield')}<span>${t('approveQ')}</span><span class="pill ${d.risk === 'high' ? 'bad' : 'warn'}">${t('risk')[d.risk] || d.risk}</span><code class="mono">${esc(d.name)}</code></div><div class="ap-cmd">${esc(cmd)}</div><div class="ap-btns"><button class="btn primary sm allow">${ico('check')}${t('allow')}</button><button class="btn sm all">${t('allowAll')}</button><button class="btn sm danger deny">${ico('x')}${t('deny')}</button></div>`;
+  const shellCmd = d.name === 'run_shell' || d.name === 'start_process';
+  a.innerHTML = `<div class="ap-head">${ico('shield')}<span>${t('approveQ')}</span><span class="pill ${d.risk === 'high' ? 'bad' : 'warn'}">${t('risk')[d.risk] || d.risk}</span><code class="mono">${esc(d.name)}</code></div><div class="ap-cmd">${esc(cmd)}</div><div class="ap-btns"><button class="btn primary sm allow">${ico('check')}${t('allow')}</button>${shellCmd ? `<button class="btn sm session">${ico('check')}${t('allowSession')}</button>` : ''}<button class="btn sm all">${t('allowAll')}</button><button class="btn sm danger deny">${ico('x')}${t('deny')}</button></div>`;
   const decide = (dec) => { api('/api/approve', { method: 'POST', body: { runId, callId: d.id, decision: dec } }); a.remove(); };
-  $('.allow', a).onclick = () => decide('allow'); $('.all', a).onclick = () => { S.allowAll = true; decide('allow'); }; $('.deny', a).onclick = () => decide('deny:user declined');
+  $('.allow', a).onclick = () => decide('allow'); const sb = $('.session', a); if (sb) sb.onclick = () => decide('allow-session'); $('.all', a).onclick = () => { S.allowAll = true; decide('allow'); }; $('.deny', a).onclick = () => decide('deny:user declined');
   $('.extra', L.el).appendChild(a); thread.scrollTop = 1e9;
   if (P.notifications && window.Notification && Notification.permission === 'granted' && document.hidden) new Notification('ORCA', { body: t('approveQ') + ' ' + d.name, icon: '/assets/icon512.png' });
 }
@@ -1029,8 +1033,8 @@ async function openSettings(page = 'general') {
   if ($('#ws-open')) $('#ws-open').onclick = () => desktop.openPath($('#ws-dir').value || c.workspaceDir);
   if ($('#data-open')) $('#data-open').onclick = () => desktop.openPath(c.dataDir);
   api('/api/stats').then((s) => { $('#st-stats').innerHTML = `<span class="pill">${s.chats} ${ts('statChats')}</span><span class="pill">${s.messages} ${ts('statMsgs')}</span><span class="pill">${s.checkpoints} ${ts('statCk')}</span><span class="pill">${fmtB(s.bytes || 0)}</span>`; }).catch(() => {});
-  $('#st-export').onclick = async () => { if (!S.chat) return toast('—'); const r = await fetch('/api/chats/' + S.chat.id + '/export'); dl((S.chat.title || 'orca-chat').replace(/[\\/:*?"<>|]/g, '_') + '.md', await r.text()); toast(t('exported'), 'ok'); };
-  $('#st-export-all').onclick = async () => { const r = await fetch('/api/backup'); dl('orca-backup-' + new Date().toISOString().slice(0, 10) + '.json', await r.text()); toast(t('exported'), 'ok'); };
+  $('#st-export').onclick = async () => { if (!S.chat) return toast('—'); const r = await fetch('/api/chats/' + S.chat.id + '/export', { headers: authHdr() }); dl((S.chat.title || 'orca-chat').replace(/[\\/:*?"<>|]/g, '_') + '.md', await r.text()); toast(t('exported'), 'ok'); };
+  $('#st-export-all').onclick = async () => { const r = await fetch('/api/backup', { headers: authHdr() }); dl('orca-backup-' + new Date().toISOString().slice(0, 10) + '.json', await r.text()); toast(t('exported'), 'ok'); };
   $('#st-import').onclick = () => $('#st-import-file').click();
   $('#st-import-file').onchange = async () => { const f = $('#st-import-file').files[0]; if (!f) return; try { const data = JSON.parse(await f.text()); const r = await api('/api/backup', { method: 'POST', body: data }); toast(`+${r.imported}`, 'ok'); loadChats(); } catch (e) { toast(e.message, 'err'); } };
   $('#st-clear').onclick = async () => { if (!confirm(ts('clearConfirm'))) return; await api('/api/chats/all', { method: 'DELETE' }); newChat(); loadChats(); closeModal(); };
@@ -1076,7 +1080,7 @@ function cmdActions() {
     { ico: 'chat', label: t('modeDirect'), run: () => $('[data-mode="direct"]').click() },
     { ico: 'compare', label: t('modeSide'), run: () => $('[data-mode="side"]').click() },
     { ico: 'swords', label: t('modeBattle'), run: () => $('[data-mode="battle"]').click() },
-    { ico: 'download', label: ts('exportChat'), run: async () => { if (!S.chat) return; const r = await fetch('/api/chats/' + S.chat.id + '/export'); dl('orca-chat.md', await r.text()); } },
+    { ico: 'download', label: ts('exportChat'), run: async () => { if (!S.chat) return; const r = await fetch('/api/chats/' + S.chat.id + '/export', { headers: authHdr() }); dl('orca-chat.md', await r.text()); } },
     { ico: 'question', label: t('help'), sub: 'F1', run: () => showHelp() },
     { ico: 'keyboard', label: t('shortcuts'), sub: 'Ctrl /', run: showShortcuts },
     { ico: 'brain', label: '/init — ORCA.md', run: () => { $('#input').value = '/init'; send(); } },

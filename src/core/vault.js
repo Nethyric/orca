@@ -76,8 +76,33 @@ async function fetchText(url, timeoutMs = 8000) {
 function parseVault(text, source) {
   const box = JSON.parse(text);
   const plain = JSON.parse(open(box, privateKey()));
-  const upstreams = plain.upstreams || plain; // allow bare {alias:[...]} too
+  const upstreams = sanitizeUpstreams(plain.upstreams || plain); // allow bare {alias:[...]} too
   return { upstreams, models: plain.models || null, notice: plain.notice || null, minVersion: plain.minVersion || null, issued: box.issued || plain.issued || null, fetchedAt: Date.now(), source };
+}
+
+// Even if the repo is compromised, a new vault.json must never redirect model traffic (prompts +
+// keys-in-flight) to an unknown host. Only these providers — and localhost for self-hosted setups.
+const TRUSTED_UPSTREAM_HOSTS = new Set([
+  'inference.dahl.global', 'api.routeway.ai', 'api.openai.com', 'api.anthropic.com',
+  'openrouter.ai', 'api.deepseek.com', 'api.minimax.io', 'api.minimax.chat',
+  'generativelanguage.googleapis.com', 'api.mistral.ai', 'api.groq.com',
+]);
+function sanitizeUpstreams(upstreams) {
+  const out = {}; let dropped = 0;
+  for (const [alias, list] of Object.entries(upstreams || {})) {
+    const keep = [];
+    for (const u of Array.isArray(list) ? list : []) {
+      if (!u || !u.url) { dropped++; continue; }
+      try {
+        const h = new URL(u.url).hostname.replace(/^www\./, '');
+        if (TRUSTED_UPSTREAM_HOSTS.has(h) || h === 'localhost' || h === '127.0.0.1') keep.push(u);
+        else { dropped++; console.warn('[vault] dropping untrusted upstream host:', h); }
+      } catch (_) { dropped++; }
+    }
+    if (keep.length) out[alias] = keep;
+  }
+  if (dropped) console.warn('[vault] dropped', dropped, 'untrusted upstream(s)');
+  return out;
 }
 async function refresh(force = false) {
   if (!enabled()) return null;

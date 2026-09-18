@@ -4,6 +4,20 @@ All notable changes to ORCA are documented here. The format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.0.7] — 2026-09-18
+
+### Security
+- **The local API is now authenticated.** Every `/api/*` request must carry a per-install token (random 64-hex, stored `0600` in the data folder) as `x-orca-token`, `Authorization: Bearer`, or `?token=` (for the event stream). The token is injected into the served page, so the app UI is unchanged. A malicious website open in the user's browser can no longer read chats, config, or run the agent.
+- **Wildcard CORS removed.** Responses no longer send `Access-Control-Allow-Origin: *`, and the `OPTIONS` preflight answers with no allow-headers, so browsers block every cross-origin call. Cross-origin requests (a foreign `Origin`) and non-loopback `Host` headers (DNS rebinding) are answered with `403`. Loopback `Origin`s (the app itself) still work.
+- **Safer default autonomy.** New installs start in `ask` mode, and existing installs are reset to `ask` once (a later explicit choice is respected). In `auto` mode, `run_shell`/`start_process` commands now still require one confirmation unless the user approved that exact command for the session — a new **“Allow for this session”** button does exactly that.
+- **Prompt-injection guard.** The system prompt tells the model that content from `web_search`, `fetch_page`, `http_request`, and files is untrusted data, never instructions; those tool results are also marked `untrusted`.
+- **Vault upstream allow-list.** A new `vault.json` can no longer redirect model traffic to an unknown host even if the repository is compromised; only known provider hosts (and localhost) are accepted, others are dropped with a warning.
+- **Stronger shell risk triage.** The denylist now also catches `curl|wget … | sh`, `find -delete`, `os.system`, `shutil.rmtree`, `eval(base64…)`, `Invoke-Expression`, `icacls … Everyone`, `schtasks /create`, `regsvr32 /s http…`, `xargs rm -rf`, and redirects into `/etc/passwd|shadow|sudoers` or `/dev/sd*`.
+
+### Added
+- **Official Brave Search API support.** Set `braveApiKey` in the config and `web_search` uses the stable `api.search.brave.com` API instead of scraping (scraping remains the fallback).
+- **`test/security.test.js`** — 11 regression checks for the token, CORS, rebinding, and token injection, wired into `npm test`.
+
 ## [0.0.6] — 2026-09-18
 
 ### Changed

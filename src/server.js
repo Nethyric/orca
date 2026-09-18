@@ -17,7 +17,7 @@ const zlib = require('zlib');
 const UI = path.join(__dirname, '..', 'ui');
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'application/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.woff2': 'font/woff2', '.json': 'application/json' };
 
-const json = (res, code, obj) => { res.writeHead(code, { 'content-type': 'application/json; charset=utf-8', 'access-control-allow-origin': '*' }); res.end(JSON.stringify(obj)); };
+const json = (res, code, obj) => { res.writeHead(code, { 'content-type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(obj)); };
 const readBody = (req) => new Promise((resolve) => { let b = ''; req.on('data', (d) => (b += d)); req.on('end', () => { try { resolve(b ? JSON.parse(b) : {}); } catch (_) { resolve({}); } }); });
 const readRaw = (req, max = 60 * 1024 * 1024) => new Promise((resolve, reject) => { const chunks = []; let n = 0; req.on('data', (d) => { n += d.length; if (n > max) { reject(new Error('file too large')); req.destroy(); } else chunks.push(d); }); req.on('end', () => resolve(Buffer.concat(chunks))); req.on('error', reject); });
 const IMG_EXT = /\.(png|jpe?g|gif|webp|bmp)$/i;
@@ -29,6 +29,24 @@ process.on('uncaughtException', (e) => console.error('[uncaught]', e && e.stack 
 process.on('unhandledRejection', (e) => console.error('[unhandled]', e && e.stack || e));
 function broadcast(payload) { const s = `data: ${JSON.stringify(payload)}\n\n`; for (const c of clients) { try { c.write(s); } catch (_) {} } }
 tools.procs.setOnChange((pr) => broadcast({ event: 'proc', data: pr }));
+
+// ---- local-API security: per-install token, no cross-origin, loopback host check (DNS-rebinding) ----
+let boundHost = '127.0.0.1';
+function hasToken(req, url) {
+  const tok = config.apiToken();
+  if (url.searchParams.get('token') === tok) return true; // EventSource cannot set headers
+  return req.headers['x-orca-token'] === tok || req.headers.authorization === 'Bearer ' + tok;
+}
+function badOrigin(req) {
+  const o = req.headers.origin;
+  if (!o) return false;
+  try { const u = new URL(o); return !['127.0.0.1', 'localhost', '[::1]', '::1'].includes(u.hostname); } catch (_) { return true; }
+}
+function badHost(req) {
+  if (!/^(127\.|::1$|\[::1\])/.test(boundHost)) return false; // user explicitly bound to LAN: trust their network
+  const h = String(req.headers.host || '').replace(/:\d+$/, '');
+  return h !== '127.0.0.1' && h !== 'localhost' && h !== '[::1]' && h !== '::1';
+}
 
 
 function startLane({ chatId, runId, lane, modelKey, history, planMode, autonomy, webMode, notes, pinned }) {
@@ -106,7 +124,7 @@ async function handleApi(req, res, url) {
   }
 
   if (p === '/api/events') {
-    res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive', 'x-accel-buffering': 'no', 'access-control-allow-origin': '*' });
+    res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive', 'x-accel-buffering': 'no' });
     res.write(': connected\n\n');
     clients.add(res);
     const ka = setInterval(() => { try { res.write(': ping\n\n'); } catch (_) {} }, 20000);
@@ -371,6 +389,13 @@ function serveStatic(req, res, url) {
   else fp = path.join(UI, fp);
   if (!fp || !fs.existsSync(fp) || fs.statSync(fp).isDirectory()) { res.writeHead(404); return res.end('not found'); }
   const ext = path.extname(fp).toLowerCase();
+  if (url.pathname === '/' || url.pathname === '/index.html') {
+    // Inject the local API token into the page so the UI can authenticate. Only the quoted
+    // placeholder value is replaced (never the variable name itself).
+    const html = fs.readFileSync(fp, 'utf8').replace("'__ORCA_TOKEN__'", "'" + config.apiToken() + "'");
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache' });
+    return res.end(html);
+  }
   const headers = { 'content-type': MIME[ext] || 'application/octet-stream', 'cache-control': /\/vendor\/|\/assets\//.test(fp) ? 'public, max-age=86400' : 'no-cache' };
   const ae = String(req.headers['accept-encoding'] || '');
   if (/\.(js|css|html|svg|json)$/.test(ext) && ae.includes('gzip')) { headers['content-encoding'] = 'gzip'; res.writeHead(200, headers); return fs.createReadStream(fp).pipe(zlib.createGzip({ level: 6 })).pipe(res); }
@@ -381,10 +406,14 @@ function serveStatic(req, res, url) {
 function createServer() {
   return http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://localhost');
-    if (req.method === 'OPTIONS') { res.writeHead(204, { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-allow-methods': '*' }); return res.end(); }
+    if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); } // no CORS headers: browsers will block every cross-origin call
+    if (badHost(req)) { res.writeHead(403); return res.end('forbidden host'); }
+    if (badOrigin(req)) { res.writeHead(403, { 'content-type': 'text/plain' }); return res.end('cross-origin request blocked'); }
     try {
-      if (url.pathname.startsWith('/api/')) await handleApi(req, res, url);
-      else serveStatic(req, res, url);
+      if (url.pathname.startsWith('/api/')) {
+        if (!hasToken(req, url)) { res.writeHead(401, { 'content-type': 'application/json; charset=utf-8' }); return res.end(JSON.stringify({ error: 'unauthorized' })); }
+        await handleApi(req, res, url);
+      } else serveStatic(req, res, url);
     } catch (e) { console.error(e); try { json(res, 500, { error: e.message }); } catch (_) {} }
   });
 }
@@ -408,6 +437,7 @@ function startBackground() {
   setTimeout(tick, 4000); setInterval(tick, 15 * 60 * 1000).unref();
 }
 function listen(port, host) {
+  boundHost = host || '127.0.0.1';
   startBackground();
   try { store.sweepRunning(); } catch (_) {}
   return new Promise((resolve, reject) => {
@@ -420,11 +450,11 @@ function listen(port, host) {
 if (require.main === module) {
   const port = +(process.env.PORT || 7860);
   if (process.env.ORCA_DATA) config.setDataDir(process.env.ORCA_DATA);
-  // Web mode has no authentication and the agent can run shell commands: bind to loopback unless HOST is set explicitly.
+  // Web mode is token-gated and loopback-bound by default; binding to all interfaces needs HOST set explicitly.
   const host = process.env.HOST || '127.0.0.1';
   listen(port, host).then(({ port }) => {
     console.log(`ORCA web mode → http://${host === '0.0.0.0' ? 'localhost' : host}:${port}  data: ${config.getDataDir()}`);
-    if (host === '0.0.0.0') console.log('WARNING: listening on all interfaces without authentication — anyone on your network can control this agent. Use a firewall or a reverse proxy with auth.');
+    if (host === '0.0.0.0') console.log('WARNING: listening on all interfaces — a per-install token still protects the API, but prefer a firewall or reverse proxy with auth.');
   });
 }
 

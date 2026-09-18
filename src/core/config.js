@@ -36,7 +36,7 @@ const DEFAULT_CONFIG = {
   customModels: [],          // legacy (< 0.0.1) custom models: { key, label, provider, baseUrl?, apiKey?, model, maxTokens }
   defaultModel: 'auto',
   compareModels: ['minimax', 'deepseek'],
-  autonomy: 'auto',          // 'ask' | 'auto' | 'yolo'
+  autonomy: 'ask',           // 'ask' | 'auto' | 'yolo' — safe default; power users can raise it in Settings
   planMode: false,
   lang: APP.defaultLanguage || 'en',   // 'en' | 'fa' | 'ru' | 'zh' (default English; auto-detected from the OS on first run)
   workspace: '',             // '' => <DATA_DIR>/workspace
@@ -57,6 +57,7 @@ const DEFAULT_CONFIG = {
   reasoningEffort: 'medium', // hint to the model: 'low' | 'medium' | 'high'
   shellTimeout: 120,
   webSearchEngine: 'auto',
+  braveApiKey: '',           // optional: official Brave Search API key → reliable web_search (scraping stays as fallback)
   // 1.4: vision / generation / social
   vision: { provider: '', model: '', baseUrl: '', apiKey: '' },   // '' = auto (any user provider with an image-capable model) | <providerId> | 'custom' (baseUrl + apiKey + model)
   imageGen: { provider: '', baseUrl: '', apiKey: '', model: '' },           // '' = auto (a gateway you added with an Images API, else free built-in) | 'builtin' | 'openai' (= any /images/generations API) | <providerId>
@@ -81,6 +82,20 @@ function setDataDir(dir) {
 function getDataDir() { fs.mkdirSync(DATA_DIR, { recursive: true }); return DATA_DIR; }
 function configPath() { return path.join(getDataDir(), 'config.json'); }
 
+// Local API token: random per install, stored 0600. The UI sends it on every /api/* request so that
+// a malicious website open in the user's browser cannot reach the agent (no wildcard CORS + token = closed).
+let _token = '', _tokenDir = '';
+function apiToken() {
+  const dir = getDataDir();
+  if (_token && _tokenDir === dir) return _token;
+  const f = path.join(dir, 'api-token');
+  try { const v = fs.readFileSync(f, 'utf8').trim(); if (/^[a-f0-9]{64}$/.test(v)) { _token = v; _tokenDir = dir; return v; } } catch (_) {}
+  _token = require('crypto').randomBytes(32).toString('hex');
+  try { fs.writeFileSync(f, _token, { mode: 0o600 }); } catch (_) {}
+  _tokenDir = dir;
+  return _token;
+}
+
 function load() {
   if (_cfg) return _cfg;
   let saved = {};
@@ -89,6 +104,9 @@ function load() {
   delete _cfg.keys; // pre-0.0.1 layout
   for (const k of ['vision', 'imageGen', 'videoGen', 'judge']) _cfg[k] = { ...DEFAULT_CONFIG[k], ...((saved[k] && typeof saved[k] === 'object') ? saved[k] : {}) };
   if (!Array.isArray(_cfg.customModels)) _cfg.customModels = [];
+  // One-time security reset: builds before this patch shipped with autonomy 'auto' (tools ran
+  // with no confirmation). Force those installs back to 'ask' once; a later explicit choice wins.
+  if (!saved.securityReset1 && _cfg.autonomy === 'auto') { _cfg.autonomy = 'ask'; _cfg.securityReset1 = true; try { fs.writeFileSync(configPath(), JSON.stringify(_cfg, null, 2)); } catch (_) {} }
   return _cfg;
 }
 function save(patch) {
@@ -172,4 +190,4 @@ function publicView() {
   };
 }
 
-module.exports = { AUTO, setDataDir, getDataDir, load, save, workspaceDir, allModels, modelInfo, resolve, fallbackOrder, publicView, PROVIDERS, BUILTIN_MODELS, builtinModels, setRemoteModels, setVaultProbe, APP };
+module.exports = { AUTO, setDataDir, getDataDir, apiToken, load, save, workspaceDir, allModels, modelInfo, resolve, fallbackOrder, publicView, PROVIDERS, BUILTIN_MODELS, builtinModels, setRemoteModels, setVaultProbe, APP };
