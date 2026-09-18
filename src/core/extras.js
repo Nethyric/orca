@@ -640,7 +640,7 @@ f.addEventListener('load',()=>{try{hook(f.contentWindow)}catch(e){errs.push('no 
     { type: 'function', function: { name: 'project_init', description: 'Create ORCA.md project memory in the workspace (like AGENTS.md/CLAUDE.md): scanned structure + sections for commands, conventions, decisions. Then fill it in with edit_file. It is loaded automatically in every future chat.', parameters: { type: 'object', properties: { overwrite: { type: 'boolean' } } } } },
     { type: 'function', function: { name: 'task', description: 'Delegate a self-contained sub-task to a sub-agent with its own fresh context (e.g. "research X and report", "explore the codebase and summarize the architecture", "write and test module Y"). It has the same tools and returns a final report. Use for parallelizable or context-heavy work; call several in one turn to run them in parallel.', parameters: { type: 'object', properties: { description: { type: 'string', description: '3-6 word label' }, prompt: { type: 'string', description: 'complete, self-contained instructions' }, model: { type: 'string' }, max_steps: { type: 'integer' } }, required: ['description', 'prompt'] } } },
   ];
-  return { impl, SCHEMAS, setCurrentChat, projectMemory, loadTodos, setSubagentRunner: (fn) => { runSubagent = fn; }, analyzeImage, findBin, visionModel };
+  return { impl, SCHEMAS, setCurrentChat, projectMemory, loadTodos, setSubagentRunner: (fn) => { runSubagent = fn; }, analyzeImage, findBin, visionModel, findChrome };
 }
 
 module.exports = { makeTools, findBin, UA };

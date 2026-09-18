@@ -329,7 +329,7 @@ const impl = {
         if (remaining === 0) resolve(null);
       }));
     });
-    if (winner) return { ...winner, query };
+    if (winner) { if (judge.enabled()) { try { winner.results = await judge.rerank(query, winner.results); winner.reranked = true; } catch (_) {} } return { ...winner, query }; }
     const w = await attempt(wiki);
     if (w.ok) return { ...w.v, query };
     return { error: 'all search engines failed', details: errors };
@@ -385,6 +385,7 @@ const impl = {
 };
 
 // Office & media tools (Word/Excel/PowerPoint/PDF + ffmpeg video/audio editing)
+const judge = require('./judge');
 const office = require('./office').makeTools({ safe, rel, WS });
 Object.assign(impl, office.impl);
 const extras = require('./extras').makeTools({ safe, rel, WS });

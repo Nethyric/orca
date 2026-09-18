@@ -34,10 +34,11 @@ All request and response bodies are JSON (`content-type: application/json`) unle
 ```json
 { "ok": true, "version": "0.0.2", "builtin": true, "vault": true, "repo": "Nethyric/orca",
   "tools": ["run_shell", "…"], "electron": false,
-  "bins": { "ffmpeg": true, "ytdlp": true, "python": "python3" }, "vision": false }
+  "bins": { "ffmpeg": true, "ytdlp": true, "chrome": true }, "vision": false,
+  "judge": { "configured": false, "enabled": false, "model": "jev-latest", "cooling": false, "stats": { "calls": 0, "ok": 0, "failed": 0, "inputTokens": 0, "outputTokens": 0, "avgMs": 0, "lastError": "" } } }
 ```
 
-`builtin` — the build carries a vault key; `vault` — the vault was fetched and decrypted; `vision` — a vision model is configured.
+`builtin` — the build carries a vault key; `vault` — the vault was fetched and decrypted; `vision` — a vision model is configured; `bins.chrome` — a Chromium browser for `browser_check`/`screenshot` was found; `judge` — state of the optional [decision engine](decision-engine.md).
 
 ## Chats
 
@@ -121,8 +122,8 @@ A single `text/event-stream` carrying every run's events. Each message is `data:
 | `status` | `{ text, kind: "thinking"|"retry"|"fallback"|"compact"|"tools", step? }` | Progress line. `retry` also covers busy sweeps ("All models are busy — retrying in 4 s") |
 | `delta` | `{ type: "content"|"reasoning"|"reset", text? }` | Streaming tokens; `reset` clears what was streamed (retry/failover) |
 | `thought_done` | `{ text }` | Final reasoning text for the step |
-| `tool_call` | `{ id, name, args, risk }` | A tool is about to run |
-| `approval` | `{ id, name, args, risk }` | Waiting for [`POST /api/approve`](#approvals-questions--stopping) |
+| `tool_call` | `{ id, name, args, risk, judged? }` | A tool is about to run (`judged` = destructive probability when the [decision engine](decision-engine.md) escalated the risk) |
+| `approval` | `{ id, name, args, risk, judged? }` | Waiting for [`POST /api/approve`](#approvals-questions--stopping) |
 | `tool_result` | `{ id, name, ok, ms, result, truncated }` | Tool finished (`result` is a string, max 4000 chars) |
 | `checkpoint` | `{ id, path, ts, created, deleted, before, after }` | A file change was snapshotted (`before`/`after` are the full contents, `null` when the file did not exist / was deleted) |
 | `files` | `{ tool, files: [path] }` | Output files produced by a tool |
@@ -131,6 +132,7 @@ A single `text/event-stream` carrying every run's events. Each message is `data:
 | `usage` | `{ prompt_tokens, completion_tokens, estimated? }` | Cumulative token usage (`estimated` when the provider sent none) |
 | `question` | `{ id, question, options }` | The agent asks you something; reply with a normal `POST /api/send` |
 | `compacted` | `{}` | History was compacted mid-run |
+| `verdict` | `{ garbage, promise, done, langMismatch }` | Decision-engine check of the answer (probabilities 0–1); only when the engine is enabled |
 | `final` | `{ text, model, modelKey, usage }` | Final answer. Long answers that hit the provider's output cap are continued automatically and stitched — the client only ever sees one `final` |
 | `error` | `{ text }` | Fatal error for this lane |
 | `stopped` | `{}` | Stopped by the user |
@@ -225,6 +227,15 @@ All keys are documented in [configuration.md](configuration.md).
 ```
 
 Never returns key material. `refresh=1` forces a re-fetch. See [vault.md](vault.md).
+
+## Decision engine
+
+| Route | Body | Result |
+|---|---|---|
+| `GET /api/judge/status` | — | `{ configured, enabled, model, cooling, stats }` |
+| `POST /api/judge/test` | `{ apiKey?, baseUrl?, model? }` (omitted values fall back to the stored config) | `{ ok, ms, model, sample }` or `{ ok: false, status, error }` |
+
+See [decision-engine.md](decision-engine.md).
 
 ## Memory, todos & search
 

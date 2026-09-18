@@ -7,7 +7,8 @@ const { URL } = require('url');
 const config = require('./core/config');
 const store = require('./core/store');
 const tools = require('./core/tools');
-const { runAgent, stopRun, approve, quick, routeAuto, compact } = require('./core/agent');
+const { runAgent, stopRun, approve, quick, routeAuto, routeAutoJudged, compact } = require('./core/agent');
+const judge = require('./core/judge');
 const remote = require('./core/remote');
 const vault = require('./core/vault');
 const catalog = require('./core/catalog');
@@ -116,12 +117,15 @@ async function handleApi(req, res, url) {
   if (p === '/api/update/apply' && req.method === 'POST') { try { const r = remote.applyUpdate(); if (r.restarting) setTimeout(() => process.exit(0), 800); return json(res, 200, r); } catch (e) { return json(res, 400, { error: e.message }); } }
   if (p === '/api/update/simulate' && req.method === 'POST' && process.env.ORCA_DEV) { broadcast({ event: 'update', data: { available: true, latest: body.version || '9.9.9', url: 'https://github.com/' + remote.REPO + '/releases', notes: body.notes || '- test release', asset: { name: 'ORCA-Agent-9.9.9-win-x64.zip' }, mustUpdate: !!body.must } }); return json(res, 200, { ok: true }); }
   if (p === '/api/update/dismiss' && req.method === 'POST') { config.save({ dismissedUpdate: body.version || '' }); return json(res, 200, { ok: true }); }
-  if (p === '/api/health') return json(res, 200, { ok: true, version: require('../package.json').version, builtin: vault.enabled(), vault: vault.status().ok, repo: remote.REPO, tools: tools.TOOL_NAMES, electron: !!process.versions.electron, bins: { ffmpeg: !!tools.extras.findBin('ffmpeg'), ytdlp: !!tools.extras.findBin('yt-dlp') }, vision: !!tools.extras.visionModel() });
+  if (p === '/api/health') return json(res, 200, { ok: true, version: require('../package.json').version, builtin: vault.enabled(), vault: vault.status().ok, repo: remote.REPO, tools: tools.TOOL_NAMES, electron: !!process.versions.electron, bins: { ffmpeg: !!tools.extras.findBin('ffmpeg'), ytdlp: !!tools.extras.findBin('yt-dlp'), chrome: !!tools.extras.findChrome() }, vision: !!tools.extras.visionModel(), judge: judge.status() });
+  if (p === '/api/judge/test' && req.method === 'POST') { const t0 = Date.now(); try { return json(res, 200, await judge.test(body)); } catch (e) { return json(res, 200, { ok: false, status: e.status, error: String(e.message || e).slice(0, 300), ms: Date.now() - t0 }); } }
+  if (p === '/api/judge/status') return json(res, 200, judge.status());
   if (p === '/api/config' && req.method === 'GET') return json(res, 200, config.publicView());
   if (p === '/api/config' && req.method === 'POST') {
     const patch = { ...body };
     delete patch.keys;
     if (patch.providers && typeof patch.providers === 'object') for (const pv of Object.values(patch.providers)) if (pv && pv.apiKey && String(pv.apiKey).includes('…')) delete pv.apiKey; // masked value → keep stored key
+    if (patch.judge && typeof patch.judge === 'object' && patch.judge.apiKey && String(patch.judge.apiKey).includes('…')) delete patch.judge.apiKey;
     if (patch.customModels) patch.customModels = patch.customModels.map((m) => { const old = config.load().customModels.find((x) => x.key === m.key); if (m.apiKey && m.apiKey.includes('…') && old) m.apiKey = old.apiKey; return m; });
     config.save(patch); return json(res, 200, config.publicView());
   }
@@ -236,7 +240,7 @@ async function handleApi(req, res, url) {
     if (body.lang && ['fa', 'en'].includes(body.lang) && body.lang !== cfg.lang) config.save({ lang: body.lang });
     let chosen = model || cfg.defaultModel;
     if (mode === 'direct') {
-      if (chosen === 'auto') chosen = routeAuto({ text: String(text || ''), history, planMode, hasFiles: /<attached_(file|image)/.test(String(text || '')) });
+      if (chosen === 'auto') { const r = await routeAutoJudged({ text: String(text || ''), history, planMode, hasFiles: /<attached_(file|image)/.test(String(text || '')) }); chosen = r.key; if (r.kind) body._routed = r; }
       lanes.push(startLane({ chatId, runId, lane: '', modelKey: chosen, history, planMode, autonomy, webMode, notes, pinned }));
     } else {
       let pair = (models.length === 2 ? models : cfg.compareModels).map((k) => (k === 'auto' ? routeAuto({ text: String(text || ''), history, planMode }) : k));

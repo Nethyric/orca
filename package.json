@@ -15,7 +15,7 @@
     "vault:keygen": "node scripts/vault.js keygen --write",
     "vault:seal": "node scripts/vault.js seal remote/vault.json",
     "vault:check": "node scripts/vault.js check",
-    "test": "node --test test/"
+    "test": "node test/stream.test.js && node test/judge.test.js"
   },
   "devDependencies": {
     "electron": "33.4.11",

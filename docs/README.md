@@ -15,11 +15,11 @@ ORCA is a desktop AI agent. You describe a task; it plans, calls tools (shell, f
 ## How a run works
 
 1. You send a message (optionally with files or images). Attached images are OCR'd — and described by a vision model if one is configured — so text-only models can use them.
-2. ORCA picks a model: the one you selected, or **Auto** routing (heavier coding/research prompts go to the stronger built-in model, short chat to the fastest).
+2. ORCA picks a model: the one you selected, or **Auto** routing (heavier coding/research prompts go to the stronger built-in model, short chat to the fastest). With the optional [decision engine](decision-engine.md) the routing is a calibrated judgment of the request instead of a keyword match.
 3. The model streams a reply. Whenever it emits a tool call, ORCA executes it, shows a step card in the UI, and feeds the result back. Risky calls wait for your approval depending on the [autonomy level](configuration.md#autonomy).
 4. File edits create **checkpoints** (before/after snapshots) that you can diff and restore from the *Changes* tab.
 5. If the model errors or hits a rate limit, ORCA fails over to the next built-in key/model automatically and tells you in a status line.
-6. The final answer is rendered as Markdown; produced files appear under *Outputs* and in the *Files* tab, from where you can open or preview them.
+6. The final answer is checked (built-in heuristics for repetition and leaked markup; with the decision engine also *garbled?*, *only a promise?*, *wrong language?* — a failing answer is regenerated or completed before you see it), then rendered as Markdown; produced files appear under *Outputs* and in the *Files* tab, from where you can open or preview them.
 
 ### Long answers, long inputs, interruptions
 

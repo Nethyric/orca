@@ -2,6 +2,14 @@
 
 All notable changes to ORCA are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+- **Decision engine** (optional, Settings → Agent): ORCA can consult a System One model — typed yes/no, choice and score judgments in ~0.2 s, output tokens free — for the decisions plain code makes badly: what kind of request a message is (auto-routing without the keyword list), whether a shell command is destructive (semantic review on top of the regex, escalates to an approval), whether the final answer is garbled / only a promise / in the wrong language (regenerated or completed before it is shown), how relevant each web result is (re-ranked), and which file a cut-off write was meant for. Bring your own key; it stays on the device and is never part of the vault or the repository. Every call fails open with a short timeout, so nothing depends on it. See `docs/decision-engine.md`.
+- **Live capability report** in the system prompt: "what can you do?" is answered from a check of this installation (connected models, Python/Chrome/ffmpeg/yt-dlp presence, vision/image/video engines, decision engine, step limits) — concrete, grouped, honest about what is off and how to enable it — instead of a generic list.
+- Big-project playbook in the prompt: multi-page sites, shops and dashboards are scaffolded from a todo list (shared design tokens, one file per page/module, JSON data), written in ≤100-line chunks, every page verified with `browser_check`, finished with a project map.
+- `GET /api/health` reports `bins.chrome` and `judge`; `GET /api/judge/status`, `POST /api/judge/test`; SSE `verdict` event and `judged` on `tool_call`/`approval`.
+
 ## [0.0.2] — 2026-09-17
 
 ### Fixed

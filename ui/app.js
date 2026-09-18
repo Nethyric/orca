@@ -578,7 +578,7 @@ function beep() { try { const ac = new (window.AudioContext || window.webkitAudi
 function showApproval(L, runId, d) {
   if (S.allowAll) { api('/api/approve', { method: 'POST', body: { runId, callId: d.id, decision: 'allow' } }); return; }
   const a = el('div', 'approval ' + d.risk);
-  const cmd = d.name === 'run_shell' ? d.args.command : JSON.stringify(d.args, null, 2);
+  const cmd = (d.name === 'run_shell' ? d.args.command : JSON.stringify(d.args, null, 2)) + (d.judged ? `\n\n⚠ decision engine: ${Math.round(d.judged * 100)}% destructive` : '');
   a.innerHTML = `<div class="ap-head">${ico('shield')}<span>${t('approveQ')}</span><span class="pill ${d.risk === 'high' ? 'bad' : 'warn'}">${t('risk')[d.risk] || d.risk}</span><code class="mono">${esc(d.name)}</code></div><div class="ap-cmd">${esc(cmd)}</div><div class="ap-btns"><button class="btn primary sm allow">${ico('check')}${t('allow')}</button><button class="btn sm all">${t('allowAll')}</button><button class="btn sm danger deny">${ico('x')}${t('deny')}</button></div>`;
   const decide = (dec) => { api('/api/approve', { method: 'POST', body: { runId, callId: d.id, decision: dec } }); a.remove(); };
   $('.allow', a).onclick = () => decide('allow'); $('.all', a).onclick = () => { S.allowAll = true; decide('allow'); }; $('.deny', a).onclick = () => decide('deny:user declined');
@@ -781,6 +781,9 @@ async function openSettings(page = 'general') {
     ${row(ts('maxSteps'), `<input class="text" id="max-steps" type="number" min="4" max="120" value="${c.maxSteps}" style="max-width:110px">`)}
     ${row(ts('temperature'), `<input type="range" id="temp" min="0" max="1.2" step="0.1" value="${c.temperature}" style="flex:1"><span class="small mono" id="temp-v">${c.temperature}</span>`)}
     ${row(ts('shellTimeout'), `<input class="text" id="shell-to" type="number" min="10" max="900" value="${c.shellTimeout || 120}" style="max-width:110px">`)}
+    <h3>${ts('judge')}</h3><p class="sub" style="margin-top:-6px">${ts('judgeDesc')}</p>
+    ${row(ts('apiKey'), `<input class="text" id="jg-key" placeholder="${c.judge?.keySet ? c.judge.apiKey : ts('pasteKey')}" autocomplete="off" spellcheck="false"><button class="btn sm" id="jg-test">${ts('test')}</button><span class="small" id="jg-msg">${c.judge?.keySet ? (S.health?.judge?.enabled ? '● ' + ts('judgeTested') : '') : ''}</span>`)}
+    ${row(ts('baseUrl'), `<input class="text" id="jg-url" placeholder="https://api.typesafe.ai/v1" value="${esc(c.judge?.baseUrl || '')}" spellcheck="false"><input class="text" id="jg-model" placeholder="jev-latest" value="${esc(c.judge?.model || '')}" spellcheck="false" style="max-width:180px"><label class="small" style="display:flex;align-items:center;gap:6px;white-space:nowrap"><input type="checkbox" id="jg-on" ${c.judge?.enabled !== false ? 'checked' : ''}>${ts('judgeOn')}</label>`)}
     <h3>${ts('vision')}</h3><p class="sub" style="margin-top:-6px">${ts('visionDesc')}</p>
     ${(() => { const provs = Object.entries(c.providers || {}).filter(([, p]) => p.keySet || p.apiKey); const opt = (v, label, cur) => `<option value="${esc(v)}" ${cur === v ? 'selected' : ''}>${esc(label)}</option>`; const provOpts = (cur) => provs.map(([id, p]) => opt(id, p.name || id, cur)).join('');
       const vcur = c.vision.provider || ''; const icur = c.imageGen.provider || ''; const vgcur = c.videoGen.provider || '';
@@ -877,12 +880,14 @@ async function openSettings(page = 'general') {
   $('#st-import-file').onchange = async () => { const f = $('#st-import-file').files[0]; if (!f) return; try { const data = JSON.parse(await f.text()); const r = await api('/api/backup', { method: 'POST', body: data }); toast(`+${r.imported}`, 'ok'); loadChats(); } catch (e) { toast(e.message, 'err'); } };
   $('#st-clear').onclick = async () => { if (!confirm(ts('clearConfirm'))) return; await api('/api/chats/all', { method: 'DELETE' }); newChat(); loadChats(); closeModal(); };
   $('#st-cancel').onclick = closeModal;
+  $('#jg-test').onclick = async () => { const b = $('#jg-test'), m = $('#jg-msg'); b.disabled = true; m.textContent = ts('testing'); const body = { baseUrl: $('#jg-url').value.trim(), model: $('#jg-model').value.trim() }; if ($('#jg-key').value.trim()) body.apiKey = $('#jg-key').value.trim(); const r = await api('/api/judge/test', { method: 'POST', body }); b.disabled = false; m.textContent = r.ok ? `✓ ${ts('judgeTested')} · ${r.ms} ms · ${r.model} · ${r.sample}` : `✗ ${ts('judgeTestFail')}: ${(r.error || '').slice(0, 120)}`; };
   $('#st-save').onclick = async () => {
     const keys = {}; $$('input[data-key]').forEach((i) => { if (i.value.trim()) keys[i.dataset.key] = i.value.trim(); });
     const vision = { provider: $('#vs-prov').value, model: $('#vs-model').value.trim(), baseUrl: $('#vs-url').value.trim() }; if ($('#vs-key').value.trim()) vision.apiKey = $('#vs-key').value.trim();
     const imageGen = { provider: $('#ig-prov').value, model: $('#ig-model').value.trim(), baseUrl: $('#ig-url').value.trim() }; if ($('#ig-key').value.trim()) imageGen.apiKey = $('#ig-key').value.trim();
     const videoGen = { provider: $('#vg-prov').value, model: $('#vg-model').value.trim() }; if ($('#vg-key').value.trim()) videoGen.apiKey = $('#vg-key').value.trim();
-    await api('/api/config', { method: 'POST', body: { keys, defaultModel: $('#st-default').value, workspace: $('#ws-dir').value.trim(), maxSteps: +$('#max-steps').value || 40, temperature: +$('#temp').value, shellTimeout: +$('#shell-to').value || 120, autonomy: autoV, reasoningEffort: effortV, persona: $('#st-persona').value, rules: $('#st-rules').value, theme: P.theme, accent: P.accent, fontSize: P.fontSize, density: P.density, lang, vision, imageGen, videoGen, cookiesBrowser: $('#ck-browser').value, cookiesFile: $('#ck-file').value.trim() } });
+    const judge = { enabled: $('#jg-on').checked, baseUrl: $('#jg-url').value.trim(), model: $('#jg-model').value.trim() }; if ($('#jg-key').value.trim()) judge.apiKey = $('#jg-key').value.trim();
+    await api('/api/config', { method: 'POST', body: { keys, defaultModel: $('#st-default').value, workspace: $('#ws-dir').value.trim(), maxSteps: +$('#max-steps').value || 40, temperature: +$('#temp').value, shellTimeout: +$('#shell-to').value || 120, autonomy: autoV, reasoningEffort: effortV, persona: $('#st-persona').value, rules: $('#st-rules').value, theme: P.theme, accent: P.accent, fontSize: P.fontSize, density: P.density, lang, vision, imageGen, videoGen, judge, cookiesBrowser: $('#ck-browser').value, cookiesFile: $('#ck-file').value.trim() } });
     await loadConfig(); toast(t('saved'), 'ok'); closeModal();
   };
 }

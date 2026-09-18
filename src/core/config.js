@@ -60,6 +60,8 @@ const DEFAULT_CONFIG = {
   vision: { provider: '', model: '', baseUrl: '', apiKey: '' },   // '' = auto (any user provider with an image-capable model) | <providerId> | 'custom' (baseUrl + apiKey + model)
   imageGen: { provider: '', baseUrl: '', apiKey: '', model: '' },           // '' = free built-in provider | 'openai' (= any /images/generations API) | <providerId> (chat model with image output)
   videoGen: { provider: '', apiKey: '', model: '' },                       // '' = animated key-frames | 'replicate' | 'fal'
+  // decision engine (System One judge — optional, bring your own key; see docs/decision-engine.md)
+  judge: { enabled: true, apiKey: '', baseUrl: '', model: '' },
   cookiesFile: '',                                                          // cookies.txt for login-walled social content
   cookiesBrowser: '',                                                       // 'chrome' | 'firefox' | 'edge' … (yt-dlp --cookies-from-browser)
   // 1.5: updates
@@ -83,7 +85,7 @@ function load() {
   try { saved = JSON.parse(fs.readFileSync(configPath(), 'utf8')); } catch (_) {}
   _cfg = { ...DEFAULT_CONFIG, ...saved, providers: (saved.providers && typeof saved.providers === 'object') ? saved.providers : {} };
   delete _cfg.keys; // pre-0.0.1 layout
-  for (const k of ['vision', 'imageGen', 'videoGen']) _cfg[k] = { ...DEFAULT_CONFIG[k], ...((saved[k] && typeof saved[k] === 'object') ? saved[k] : {}) };
+  for (const k of ['vision', 'imageGen', 'videoGen', 'judge']) _cfg[k] = { ...DEFAULT_CONFIG[k], ...((saved[k] && typeof saved[k] === 'object') ? saved[k] : {}) };
   if (!Array.isArray(_cfg.customModels)) _cfg.customModels = [];
   return _cfg;
 }
@@ -96,7 +98,7 @@ function save(patch) {
       for (const [id, pv] of Object.entries(patch.providers)) { if (pv === null) { delete nx[id]; continue; } const cur = nx[id] || {}; const m = { ...cur, ...pv }; if (!pv.apiKey) m.apiKey = cur.apiKey || ''; nx[id] = m; }
       c.providers = nx; delete patch.providers;
     }
-    for (const k of ['vision', 'imageGen', 'videoGen']) if (patch[k] && typeof patch[k] === 'object') { const nx = { ...c[k] }; for (const [kk, vv] of Object.entries(patch[k])) { if (kk === 'apiKey' && (vv == null || String(vv).includes('…'))) continue; nx[kk] = vv; } c[k] = nx; delete patch[k]; }
+    for (const k of ['vision', 'imageGen', 'videoGen', 'judge']) if (patch[k] && typeof patch[k] === 'object') { const nx = { ...c[k] }; for (const [kk, vv] of Object.entries(patch[k])) { if (kk === 'apiKey' && (vv == null || String(vv).includes('…'))) continue; nx[kk] = vv; } c[k] = nx; delete patch[k]; }
     Object.assign(c, patch);
   }
   fs.writeFileSync(configPath(), JSON.stringify(c, null, 2));
@@ -158,6 +160,7 @@ function publicView() {
     vision: { ...c.vision, apiKey: mask(c.vision.apiKey), keySet: !!c.vision.apiKey },
     imageGen: { ...c.imageGen, apiKey: mask(c.imageGen.apiKey), keySet: !!c.imageGen.apiKey },
     videoGen: { ...c.videoGen, apiKey: mask(c.videoGen.apiKey), keySet: !!c.videoGen.apiKey },
+    judge: { ...c.judge, apiKey: mask(c.judge.apiKey), keySet: !!c.judge.apiKey },
     version: (() => { try { return require('../../package.json').version; } catch (_) { return ''; } })(),
     dataDir: getDataDir(),
     workspaceDir: workspaceDir(),

@@ -30,6 +30,8 @@ ORCA is a desktop agent that plans, writes code, runs it, reads the errors and f
 
 - **Autonomous by default.** 41 real tools: shell, Node/Python, file editing, web search, HTTP, headless-browser checks, Office documents, media, OCR, image and video generation, sub‑agents.
 - **Any model.** Built-in models with automatic failover, plus your own providers (cloud or local). Keys never leave your device.
+- **Knows what it can do.** Ask "what can you do?" and the answer is generated from a live capability check of your installation — connected models, present binaries, enabled engines — not from a canned list.
+- **Decision engine (optional).** Plug in a System One model and ORCA gets calibrated judgments in ~0.2 s: smarter auto-routing, semantic command-risk review, verification of every answer (garbled, promised-but-not-done, wrong language), re-ranked web results.
 - **Three ways to chat.** Direct, side-by-side comparison, or blind battle with a local leaderboard.
 - **Checkpoints and diffs.** Every file change is snapshotted; restore any step with one click.
 - **Built for long work.** Output caps are continued transparently, long pastes become files, stopped answers can be continued, and pins, notes and branches keep long chats on track.
@@ -70,6 +72,7 @@ Anthropic-style and OpenAI-style APIs are both supported, as are local servers (
 | [Tools](docs/tools.md) | Reference for all 41 agent tools |
 | [HTTP API](docs/api.md) | The local REST + SSE API used by the UI (and usable by scripts) |
 | [Built-in models & the vault](docs/vault.md) | How built-in keys are shipped, rotated and protected |
+| [Decision engine](docs/decision-engine.md) | Optional System One model for routing, command-risk review, answer verification and search re-ranking |
 | [Troubleshooting](docs/troubleshooting.md) | Common problems and fixes |
 | [Security](SECURITY.md) | Threat model, reporting |
 

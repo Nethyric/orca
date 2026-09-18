@@ -23,6 +23,7 @@ function authHeadersFor(cfg) {
 }
 const tools = require('./tools');
 const store = require('./store');
+const judge = require('./judge');
 const APP = (() => { try { return require('../../orca.config.json'); } catch (_) { return {}; } })();
 const APP_VERSION = 'v' + ((() => { try { return require('../../package.json').version; } catch (_) { return '0.0.0'; } })());
 function nowString() {
@@ -68,6 +69,26 @@ function routeAuto({ text = '', history = [], planMode = false, hasFiles = false
   if (lastA && (lastA.events || []).some((e) => e.event === 'tool_call' && !['web_search', 'fetch_page', 'recall'].includes(e.data?.name))) return strong.key;
   return fast.key;
 }
+// Same decision with the decision engine when it is configured: a calibrated "what kind of request is this"
+// judgment replaces the keyword list (which misses "make the buttons blue" and over-triggers on "test").
+// Returns { key, kind, confidence }; falls back to routeAuto when the judge is off, unsure, or slow.
+async function routeAutoJudged(o) {
+  const fallback = routeAuto(o);
+  if (!judge.enabled()) return { key: fallback, kind: null };
+  const models = config.allModels().filter((m) => config.resolve(m.key)?.apiKey);
+  const live = (m) => !vault.isVaultModel(m) || vault.liveCount(vault.aliasOf(m)) > 0;
+  let strong = models.find((m) => m.tier === 'strong') || models[0];
+  let fast = models.find((m) => m.tier === 'fast') || strong;
+  if (!strong || !fast || strong.key === fast.key) return { key: fallback, kind: null };
+  if (!live(fast) && live(strong)) fast = strong;
+  if (!live(strong) && live(fast)) strong = fast;
+  const text = String(o.text || '').replace(/<attached_(file|image|text)[\s\S]*?<\/attached_\1>/g, '[attachment]');
+  const recent = o.history.slice(-2).map((m) => `${m.role}: ${String(m.content || '').slice(0, 300)}`);
+  const r = await judge.intent(text, recent).catch(() => null);
+  if (!r || r.confidence < 0.55) return { key: fallback, kind: r && r.kind };
+  if (o.planMode || o.hasFiles) return { key: strong.key, kind: r.kind, confidence: r.confidence };
+  return { key: r.kind === 'light' ? fast.key : strong.key, kind: r.kind, confidence: r.confidence };
+}
 
 // ---- context window management: keep system + recent turns within a char budget ----
 function fitContext(msgs, budget = 160000) {
@@ -93,11 +114,38 @@ function projectMemory() {
   try { const pm = tools.extras.projectMemory(); if (!pm) return ''; return `\n\nPROJECT MEMORY (${pm.file} in the workspace — follow it; update it with edit_file when decisions change):\n${pm.text}`; } catch (_) { return ''; }
 }
 
+// What this installation can actually do right now — models that are connected, binaries that are present,
+// optional engines that are configured. The agent answers "what can you do?" from this, not from imagination.
+let capCache = { at: 0, key: '', text: '' };
+function capabilityReport({ py, vision, modelLabel } = {}) {
+  const ck = `${py}|${vision ? vision.model : ''}|${modelLabel || ''}`;
+  if (capCache.text && capCache.key === ck && Date.now() - capCache.at < 60000) return capCache.text;
+  const c = config.load();
+  const has = (n) => { try { return !!tools.extras.findBin(n); } catch (_) { return false; } };
+  const chrome = (() => { try { return !!tools.extras.findChrome(); } catch (_) { return false; } })();
+  const models = config.allModels().filter((m) => config.resolve(m.key)?.apiKey).map((m) => m.label + (m.builtin ? '' : ' (your key)'));
+  const js = judge.status();
+  const lines = [
+    `models connected: ${models.join(', ') || 'none'} · "ORCA" auto-routing picks per message${modelLabel ? ' · serving now: ' + modelLabel : ''}`,
+    `code & files: run_shell, run_node${py ? ', run_python (' + py + ')' : ' (Python NOT installed → run_node)'}, read/write/edit/delete files, glob, grep, diagnostics, checkpoints (every edit is undoable from the Changes panel)`,
+    `web: web_search (live), fetch_page, http_request${js.enabled ? ' · results re-ranked by the decision engine' : ''}`,
+    `browser: ${chrome ? 'headless Chrome found → browser_check (console errors + screenshot) and screenshot work' : 'NO Chrome/Edge found → browser_check/screenshot unavailable until a Chromium browser is installed'}`,
+    `media: ${has('ffmpeg') ? 'ffmpeg bundled → edit/convert/trim/concat/subtitles/gif' : 'ffmpeg missing'} · ${has('yt-dlp') ? 'yt-dlp bundled → social_download/social_trending' : 'yt-dlp missing'}`,
+    `images: OCR (eng/fas/rus/chi_sim) · vision model ${vision ? 'ON (' + vision.model + ')' : 'OFF — images are read by OCR only'} · generate_image ${c.imageGen?.provider ? 'via ' + c.imageGen.provider : 'via free built-in provider'} · generate_video ${c.videoGen?.provider ? 'via ' + c.videoGen.provider : '(key-frame animation; add a Replicate/fal key for real T2V)'}`,
+    `office: docx/xlsx/pptx write, docx/xlsx/pdf read`,
+    `agent: todo checklist, parallel sub-agents (task), long-term memory, ORCA.md project memory, plan mode, side-by-side & battle modes, ${c.maxSteps || 40} tool steps per run, output auto-continues past the per-turn limit`,
+    `decision engine: ${js.enabled ? 'ON (' + js.model + ') — request routing, command-risk review, answer verification, search re-ranking' : js.configured ? 'configured but disabled' : 'OFF (optional; Settings → Agent)'}`,
+  ];
+  capCache = { at: Date.now(), key: ck, text: lines.map((l) => '- ' + l).join('\n') };
+  return capCache.text;
+}
+
 function systemPrompt(opts = {}) {
   const c = config.load();
   const ws = config.workspaceDir();
   const py = tools.findPython();
   const vision = (() => { try { return tools.extras.visionModel(); } catch (_) { return null; } })();
+  const caps = capabilityReport({ py, vision, modelLabel: opts.modelLabel });
   const lang = ({ en: 'English', fa: 'Persian (Farsi)', ru: 'Russian', zh: 'Simplified Chinese' })[c.lang] || 'English';
   const persona = (c.persona || '').trim() ? `\n\nABOUT THE USER: ${c.persona.trim().slice(0, 1500)}` : '';
   const rules = (c.rules || '').trim() ? `\n\nUSER RULES (always follow):\n${c.rules.trim().slice(0, 6000)}` : '';
@@ -115,6 +163,9 @@ IDENTITY (answer these from here, instantly, without tools): maker/company: ${AP
 NOW: ${nowString()}. Use this for anything time-related ("today", "this year", deadlines, ages, "latest"); your training data is older than this date, so verify recent facts with web_search.
 
 TOOLS (real, executed on this machine — never fake a result): shell (${process.platform === 'win32' ? 'cmd.exe by default; PowerShell auto-detected' : 'bash'}), run_node (always available), ${py ? 'run_python (' + py + ')' : 'NO Python — use run_node'}, files (read_file/write_file/edit_file/delete_file/list_files/glob/grep) in workspace "${ws}" (shell cwd; relative paths resolve there), diagnostics (syntax check), todo_write/todo_read (visible checklist), task (sub-agents with fresh context, run in parallel), web_search + fetch_page + http_request, VISION: view_image (OCR eng+fas${vision ? ' + vision model ' + vision.model : '; no vision model configured — text-only models, OCR is what you get'}), screenshot (headless Chrome), browser_check (headless Chrome: runtime errors + screenshot of any HTML/URL — use it instead of installing playwright/puppeteer), SOCIAL: social_download (Instagram/TikTok/X/YouTube/… videos, photos, carousels, profiles, playlists → downloads/), social_trending (TikTok explore feed & search, YouTube trending, X trends, Instagram user posts; download=true to fetch), GENERATE: generate_image (text→image, free provider built in), generate_video (text→video; real T2V with a Replicate/fal key, otherwise animated AI key-frames), OFFICE: write_docx/read_docx (Word), write_xlsx/read_xlsx (Excel, formulas, csv), write_pptx (designed PowerPoint decks), read_pdf, MEDIA (built-in ffmpeg, no install): media_info, media_edit (trim/convert/resize/compress/extract_audio/speed/gif/thumbnail/text watermark/crop/rotate/volume/fade), media_concat, media_from_images (slideshow), media_subtitles; remember/recall long-term memory, project_init (ORCA.md project memory), ask_user.
+
+CAPABILITIES — verified on this machine right now (answer "what can you do / what are your features / can you X?" from THIS list, in the user's language: concrete, grouped, honest about what is OFF or missing and how to enable it, then 3-4 example requests tailored to the user's context. Never a vague "I can help with many things", never invent a capability that is not listed, never hide a limitation):
+${caps}
 
 HOW TO WORK
 - Act first, ask only when a wrong guess would be costly. Never open with a questionnaire: pick sensible defaults, state them in one line, and start building; the user can redirect you. If the user answers a question with a bare choice/token/number, that IS the answer — continue immediately. Decompose big goals; call independent tools together in one turn (they run in parallel).
@@ -136,6 +187,7 @@ HOW TO WORK
 - Multi-step jobs (3+ steps): first call todo_write with the full checklist, then keep statuses current (in_progress → done) as you work; the user watches it live. Big independent sub-problems → task sub-agents in parallel.
 - Images the user attaches are saved under attachments/ and pre-analyzed for you (OCR text${vision ? ' + vision description' : ''} appears inside <attached_image>). Use view_image on any image path/URL to inspect it (question= what to look for). Never claim you cannot see images without trying view_image first; if only OCR is available, say what the OCR read and what could not be determined.
 - Social media: for "download this link" use social_download directly (no research needed). For "trending/explore/popular videos" use social_trending (platform, region, query, download=true, max_download). Instagram Explore/stories/private content need the user's cookies — say so briefly and offer the alternatives instead of failing silently. Report every saved file path.
+- BIG PROJECTS (multi-page sites, shops, dashboards, full apps): do the whole thing, never a "starter". First todo_write the page/feature list, then scaffold the folder (shared style.css with design tokens, components/partials, one file per page or module, data in a JSON file), write each file in ≤100-line chunks (append=true to continue), verify every page with browser_check, and finish with a short map: pages, files, how to run, what to extend next. Real content in the user's language (menus, products, texts) — never lorem ipsum. If the model output limit forces a pause, continue automatically until the list is done.
 - WEB APPS, SITES & GAMES: build them properly, not as demos. Structure: index.html + style.css + main.js (+ modules) unless the user asks for a single file. Include a real layout (header/nav/hero/sections/footer for sites; HUD, menu, pause, game-over, restart, best score for games), responsive CSS, keyboard + touch input, sensible defaults, no external CDNs (offline must work), no placeholder lorem ipsum. After writing, ALWAYS run browser_check on the entry HTML: it loads the page in headless Chrome, reports console errors/uncaught exceptions and takes a screenshot — fix every error and re-check before you answer. If browser_check is unavailable, run a quick node --check on the JS and a static sanity pass (matching braces, referenced ids exist). Tell the user the path and that they can open it from the Files tab.
 - Final answer: concise Markdown in the user's language (default ${lang}); code, commands and paths in English. Write only the answer itself — never narrate your process ("The user asked…", "I'll answer concisely", "Let me…") and never restate the same answer twice. State what you did, results, file paths. Files you produced (images, videos, docs) → list their paths so the UI can preview them. No tool-output dumps unless asked.${effort}${plan}${web}${persona}${rules}${notes}${pins}${projectMemory()}${memorySnippet()}`;
 }
@@ -661,7 +713,7 @@ function toApiMessages(history) {
 const MUTATING_ALL = new Set(['write_file', 'edit_file', 'delete_file', 'run_shell', 'run_python', 'run_node', 'write_docx', 'write_xlsx', 'write_pptx', 'media_edit', 'media_concat', 'media_from_images', 'media_subtitles', 'social_download', 'generate_image', 'generate_video', 'project_init', 'task']);
 
 async function requestApproval(run, emit, call, risk) {
-  emit('approval', { id: call.id, name: call.name, args: call.args, risk });
+  emit('approval', { id: call.id, name: call.name, args: call.args, risk, ...(call.judged ? { judged: call.judged } : {}) });
   return new Promise((resolve) => { run.approvals.set(call.id, resolve); });
 }
 
@@ -692,9 +744,10 @@ async function runAgent(o) {
   if (o.lane !== 'sub') currentEmit = emit;
   const seen = new Map(); // loop detector: signature -> count of failures
   let nudges = 0, continuations = 0, carried = '';
+  let stepCap = maxSteps, extensions = 0, progressAt = -1; // the cap stretches (twice, +50 %) while real work is still being done
 
   try {
-    for (let step = 0; step < maxSteps; step++) {
+    for (let step = 0; step < stepCap; step++) {
       if (stopped()) { emit('stopped', {}); return { api, checkpoints, stopped: true }; }
       emit('status', { text: L().thinking(usedLabel, step + 1), kind: 'thinking', step: step + 1 });
       let res;
@@ -750,6 +803,24 @@ async function runAgent(o) {
           continue;
         }
         const text = tidyAnswer(res.content, res.reasoning) || (res.reasoning ? res.reasoning.slice(-1200) : L().noAnswer);
+        // Decision engine (optional): a calibrated second opinion on the answer before the user sees it.
+        // Garbled text → regenerate once; "I will now do X" with no X done → make it do X; the answer in the wrong
+        // language → translate. Each nudge happens at most once per run and never for sub-agents or plan mode.
+        if (o.lane !== 'sub' && !o.planMode && judge.enabled() && step < maxSteps - 1 && text.length >= 8 && text !== L().noAnswer) {
+          const lastUser = [...msgs].reverse().find((m) => m.role === 'user' && typeof m.content === 'string' && !/^\[system\]/.test(m.content));
+          const actions = api.filter((m) => m.role === 'assistant' && m.tool_calls).flatMap((m) => m.tool_calls.map((t) => { let a = {}; try { a = JSON.parse(t.function.arguments || '{}'); } catch (_) {} return `${t.function.name} ${a.path || a.command || a.query || a.url || ''}`.trim(); }));
+          const v = lastUser ? await judge.answerCheck({ request: lastUser.content, answer: text, actions }).catch(() => null) : null;
+          if (v) {
+            emit('verdict', { garbage: v.garbage, promise: v.promise, done: v.done, langMismatch: v.langMismatch });
+            const nudge = (why, instruction) => { o._judgeNudges = (o._judgeNudges || 0) + 1; carried = ''; msgs.push({ role: 'user', content: instruction }); api.push(msgs[msgs.length - 1]); emit('status', { text: L().retry(why), kind: 'retry' }); };
+            const realSentence = lastUser && String(lastUser.content).replace(/<attached_[\s\S]*$/, '').trim().split(/\s+/).length >= 3;
+            if ((o._judgeNudges || 0) < 2) {
+              if (v.garbage != null && v.garbage >= 0.85 && !o._jGarbage) { o._jGarbage = true; emit('delta', { type: 'reset' }); nudge('answer looked garbled — regenerating', '[system] Your previous message was garbled (repeated fragments or leaked tokens) and was not shown to the user. Write the answer again, cleanly, once.'); continue; }
+              if (v.promise != null && v.promise >= 0.8 && (v.done == null || v.done < 0.4) && (v.asksUser == null || v.asksUser < 0.5) && !o._jPromise) { o._jPromise = true; emit('delta', { type: 'reset' }); nudge('answer promised work instead of doing it — continuing', '[system] Your previous message only announced what you were going to do — nothing was done and the user did not see it. Do the work now with the tools (create the files, run the commands), then report what was actually done.'); continue; }
+              if (v.langMismatch != null && v.langMismatch >= 0.85 && realSentence && !o._jLang && text.length < 12000) { o._jLang = true; emit('delta', { type: 'reset' }); nudge('answer was in the wrong language — translating', '[system] Your previous message was written in a different language than the user\'s. Rewrite that same answer in the user\'s language (keep code, commands and paths as they are). Do not add anything else.'); continue; }
+            }
+          }
+        }
         emit('final', { text, model: usedLabel, modelKey: res.used, usage: totalUsage });
         return { api, checkpoints, text, model: usedLabel };
       }
@@ -774,8 +845,13 @@ async function runAgent(o) {
       const decisions = new Map();
       for (const call of prepared) {
         if (stopped()) { emit('stopped', {}); return { api, checkpoints, stopped: true }; }
-        const risk = tools.riskOf(call.name, call.args);
-        emit('tool_call', { id: call.id, name: call.name, args: call.args, risk });
+        let risk = tools.riskOf(call.name, call.args);
+        if (call.name === 'run_shell' && risk === 'medium' && autonomy !== 'yolo' && judge.enabled()) {
+          // the regex only knows a fixed list; the decision engine reads the command (`curl … | sudo bash`, `git checkout -- .`, pipes to remote hosts)
+          const p = await judge.commandRisk(String(call.args.command || ''), config.workspaceDir()).catch(() => null);
+          if (p != null && p >= 0.7) { risk = 'high'; call.judged = p; }
+        }
+        emit('tool_call', { id: call.id, name: call.name, args: call.args, risk, ...(call.judged ? { judged: call.judged } : {}) });
         let decision = 'allow';
         if (o.planMode && MUTATING_ALL.has(call.name)) decision = 'deny_plan';
         else if (autonomy === 'ask' && risk !== 'none') decision = await requestApproval(run, emit, call, risk);
@@ -792,7 +868,14 @@ async function runAgent(o) {
         if (decision === 'deny_plan') result = { error: 'PLAN MODE is on: write/run tools are disabled for this turn. Stop calling tools now and reply with the numbered plan, ending with "Shall I execute?" in the user\'s language (fa: اجرا کنم؟ / ru: Выполнить? / zh: 要执行吗？). (The user can turn Plan off with the Plan button in the composer.)' };
         else if (decision !== 'allow') result = { error: 'User denied this action.' + (typeof decision === 'string' && decision.startsWith('deny:') ? ' Reason: ' + decision.slice(5) : '') };
         else if (call.broken) {
-          const sv = call.name === 'write_file' ? salvageArgs(call.partial, mentionedPaths(msgs)) : {};
+          const hints = mentionedPaths(msgs);
+          const sv = call.name === 'write_file' ? salvageArgs(call.partial, hints) : {};
+          if (sv.inferred && !sv.append && sv.content && hints.length >= 2 && judge.enabled()) {
+            // several files were mentioned: let the decision engine pick the one this content belongs to (or none)
+            const conv = msgs.filter((m) => (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string').slice(-6).map((m) => `${m.role}: ${m.content.replace(/<think>[\s\S]*?<\/think>/g, '').slice(0, 400)}`);
+            const pick = await judge.pickPath({ conversation: conv, contentHead: sv.content.slice(0, 600), candidates: hints }).catch(() => null);
+            if (pick) { sv.path = pick; sv.fromHint = true; }
+          }
           const limitNote = `HARD LIMIT: one tool call may carry at most ~5000 characters of arguments (~4000 output tokens per turn, thinking included).`;
           if (sv.path && sv.content && sv.content.length > 200) {
             if (sv.inferred && !sv.append) {
@@ -862,6 +945,13 @@ async function runAgent(o) {
         msgs.push({ role: 'user', content: '[system] You have already run that successfully — repeating it changes nothing. Do not call any tool now: reply to the user with the final answer as plain text.' }); api.push(msgs[msgs.length - 1]);
         emit('status', { text: ({ fa: 'تکرار بی‌نتیجه — درخواست پاسخ نهایی', ru: 'Повтор без результата — запрашиваю ответ', zh: '重复无进展 — 要求给出最终回答' })[config.load().lang] || 'Repeating without progress — asking for the answer', kind: 'retry' });
         continue;
+      }
+      // Big jobs (multi-page sites, many files) legitimately need more rounds than the cap: while the last rounds
+      // produced new successful edits/commands (not loops, not echoes), extend the budget instead of stopping mid-build.
+      for (const c of prepared) if (MUTATING.has(c.name) && !echoLike(c) && countOf(c) === 1) { const tm = results[prepared.indexOf(c)]; try { const j = JSON.parse(tm.content); if (!j.error && !(j.exit_code && j.exit_code !== 0)) progressAt = step; } catch (_) {} }
+      if (step >= stepCap - 1 && extensions < 2 && !looping && progressAt >= step - 3) {
+        extensions++; stepCap += Math.ceil(maxSteps / 2);
+        emit('status', { text: ({ fa: 'کار در جریان است — بودجهٔ مراحل افزایش یافت', ru: 'Работа продолжается — лимит шагов увеличен', zh: '仍在推进 — 已增加步骤预算' })[config.load().lang] || 'Still making progress — extending the step budget', kind: 'retry' });
       }
       if (looping && nudges < 2) {
         nudges++;
@@ -969,4 +1059,4 @@ async function anthropicOnce(cfg, messages, onDelta, ctl, kick, useTools, temper
   return { content, reasoning, tool_calls: calls, usage, finish: finish === 'max_tokens' ? 'length' : finish };
 }
 
-module.exports = { runAgent, stopRun, approve, quick, compact, systemPrompt, splitReasoning, routeAuto, fitContext, salvageArgs };
+module.exports = { runAgent, stopRun, approve, quick, compact, systemPrompt, splitReasoning, routeAuto, routeAutoJudged, fitContext, salvageArgs };
