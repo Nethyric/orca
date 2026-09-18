@@ -545,6 +545,8 @@ async function streamOnce(cfg, messages, onDelta, signal, useTools, temperature,
   const tcs = [...calls.values()].filter((c) => c.function.name);
   if (useTools && !tcs.length) { const pt = parseTextToolCalls(sr.content); if (pt.calls.length) { tcs.push(...pt.calls); sr.content = pt.text; onDelta({ type: 'reset' }); if (sr.reasoning) onDelta({ type: 'reasoning', text: sr.reasoning }); if (sr.content) onDelta({ type: 'content', text: sr.content }); } }
   if (!finish && !sawDone && !tcs.length && sr.content.trim()) finish = 'cut'; // proxy/provider closed the stream early
+  // the provider dropped the stream a few characters into a tool call (not a token limit, nothing to salvage) → treat as a stall so the key/model rotation retries instead of feeding the model a misleading "arguments cut off" error
+  if (tcs.length && finish !== 'length' && !oversized && tcs.reduce((a, c) => a + (c.function.arguments || '').length, 0) < 1500 && tcs.some((c) => { try { JSON.parse(c.function.arguments || '{}'); return false; } catch (_) { return true; } })) { const e = new Error('provider cut the stream inside a tool call'); e.status = 504; throw e; }
   if ((finish === 'stop' || !finish) && !tcs.length && suspiciousStop(sr.content, Date.now() - startedAt)) finish = 'cut'; // proxy time limit reported as a normal stop / [DONE] without finish_reason
   return { content: sr.content, reasoning: sr.reasoning, tool_calls: tcs, usage: usage || estimateUsage(messages, content, reasoning, [...calls.values()].map((c) => c.function.arguments || '').join('')), finish };
   } catch (e) {
@@ -586,10 +588,11 @@ async function streamOnce(cfg, messages, onDelta, signal, useTools, temperature,
 async function callModel(modelKey, messages, opts) {
   const { emit, signal } = opts;
   const waits = [1500, 2500, 4000, 6000, 8000, 10000, 12000, 15000]; // ≈ 1 min in total; the shared concurrency cap usually clears within seconds
+  const t0 = Date.now(), budget = opts.budgetMs || 90000; // hard ceiling per model call: sweeps over a stalling primary + a dead pool must not hang a step for minutes
   for (let round = 0; ; round++) {
-    try { return await callModelOnce(modelKey, messages, opts); }
+    try { return await callModelOnce(modelKey, messages, { ...opts, round }); }
     catch (e) {
-      if (signal?.aborted || !e.transient || round >= waits.length || (e.outage && round >= 3)) throw e; // a full outage gets ~15 s of sweeps, a busy pool ~1 min
+      if (signal?.aborted || !e.transient || round >= waits.length || (e.outage && round >= 3) || Date.now() - t0 > budget) throw e; // a provider outage gets ~15 s of sweeps, a busy pool ~1 min
       const ms = waits[round];
       emit('status', { text: L().busyWait ? L().busyWait(Math.round(ms / 1000)) : `All models are busy — retrying in ${Math.round(ms / 1000)} s`, kind: 'retry' });
       await new Promise((res) => { const onAb = () => { clearTimeout(t); res(); }; const t = setTimeout(() => { signal?.removeEventListener('abort', onAb); res(); }, ms); signal?.addEventListener('abort', onAb, { once: true }); });
@@ -597,10 +600,10 @@ async function callModel(modelKey, messages, opts) {
     }
   }
 }
-async function callModelOnce(modelKey, messages, { emit, signal, useTools = true, temperature, allowFallback = true }) {
+async function callModelOnce(modelKey, messages, { emit, signal, useTools = true, temperature, allowFallback = true, round = 0 }) {
   const order = allowFallback ? config.fallbackOrder(modelKey) : [modelKey];
   let last = '', transient = false, glitched = null, lastWhy = ''; // transient = at least one upstream was merely busy → worth another sweep
-  let fails = 0, srvFails = 0, lastStatus = 0; // every failure a 5xx → the provider is down, not busy: say so and stop sweeping sooner
+  let fails = 0, srvFails = 0, stallFails = 0, lastStatus = 0; // every failure a 5xx → the provider is down, not busy: say so and stop sweeping sooner
   for (let i = 0; i < order.length; i++) {
     const logical = config.resolve(order[i]);
     if (!logical || !logical.apiKey) continue;
@@ -611,13 +614,13 @@ async function callModelOnce(modelKey, messages, { emit, signal, useTools = true
     if (vault.isVaultModel(logical) && vault.liveCount(vault.aliasOf(logical)) === 0 && order.slice(i + 1).some((k) => { const l = config.resolve(k); return l && l.apiKey && (!vault.isVaultModel(l) || vault.liveCount(vault.aliasOf(l)) > 0); })) { last = `${logical.label}: busy`; continue; }
     for (let u = 0; u < ups.length; u++) {
       const cfg = ups[u];
-      const tries = i === 0 && u === 0 ? 2 : 1; // a busy key answers 429 instantly; spend the time on the next key/model instead of waiting
+      const tries = round === 0 && i === 0 && u === 0 ? 2 : 1; // a busy key answers 429 instantly; spend the time on the next key/model instead of waiting
       let moveOn = false;
       for (let a = 0; a < tries && !moveOn; a++) {
         if (signal?.aborted) throw new Error('aborted');
         let emitted = false;
         try {
-          const res = await streamOnce(cfg, messages, (d) => { emitted = true; emit('delta', d); }, signal, useTools, temperature, i === 0 && u === 0 ? 25000 : 15000);
+          const res = await streamOnce(cfg, messages, (d) => { emitted = true; emit('delta', d); }, signal, useTools, temperature, round === 0 && i === 0 && u === 0 ? 25000 : 15000); // retry rounds: a stalling primary must not eat 25 s per sweep
           // label the answer with the model that actually produced it (a vault alias may fall back to another model)
           const actual = vault.isVaultModel(logical) && u > 0 && cfg.model !== ups[0].model ? (config.allModels().find((m) => vault.isVaultModel(m) && expand(m)[0]?.model === cfg.model)?.label || cfg.label) : cfg.label;
           if (!res.tool_calls?.length && degenerate(res.content) && order.length > 1) {
@@ -631,7 +634,7 @@ async function callModelOnce(modelKey, messages, { emit, signal, useTools = true
           return { ...res, used: order[i], label: actual };
         } catch (e) {
           if (signal?.aborted || e.name === 'AbortError') throw new Error('aborted');
-          last = `${cfg.label}: ${e.message}`; fails++; if (e.status >= 500 && e.status !== 504) { srvFails++; lastStatus = e.status; }
+          last = `${cfg.label}: ${e.message}`; fails++; if (e.status === 504) stallFails++; else if (e.status >= 500) { srvFails++; lastStatus = e.status; }
           if (emitted) emit('delta', { type: 'reset' });
           // human status instead of the raw provider JSON ("HTTP 429: {"error":{"code":"model_concurrency"…")
           const why = e.status === 429 ? 'busy' : e.status === 504 ? 'no response' : e.status >= 500 ? 'provider error ' + e.status : e.status === 401 || e.status === 403 ? 'key rejected' : e.status === 402 ? 'out of credit' : String(e.message || '').replace(/^HTTP \d+:\s*/, '').slice(0, 80);
@@ -646,7 +649,7 @@ async function callModelOnce(modelKey, messages, { emit, signal, useTools = true
     }
   }
   if (glitched) { emit('delta', { type: 'reset' }); if (glitched.reasoning) emit('delta', { type: 'reasoning', text: glitched.reasoning }); emit('delta', { type: 'content', text: glitched.content }); return glitched; }
-  const outage = fails >= 2 && srvFails === fails;
+  const outage = srvFails >= 2 && srvFails + stallFails === fails; // only 5xx (plus silent/stalled models) → the pool is down, not busy
   const err = new Error(outage && L().outage ? L().outage(lastStatus) : L().allFailed + last.replace(/HTTP (\d+): \{[\s\S]*$/, 'HTTP $1').slice(0, 200)); err.transient = transient; err.outage = outage; throw err;
 }
 
