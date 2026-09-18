@@ -30,6 +30,7 @@ ORCA is a desktop agent that plans, writes code, runs it, reads the errors and f
 
 - **Autonomous by default.** 42 real tools: shell, Node/Python, file editing, web search, HTTP, headless-browser checks, Office documents, media, OCR, image and video generation, sub‑agents.
 - **Any model.** Built-in models with automatic failover, plus your own providers (cloud or local). Keys never leave your device.
+- **Builds whole sites.** `scaffold_site` lays down a complete responsive multi-page skeleton (design tokens, shared navigation/cart/forms/data layer, one file per page, RTL when needed) in one step, so the model spends its budget on real content, then verifies every page in a headless browser.
 - **Knows what it can do.** Ask "what can you do?" and the answer is generated from a live capability check of your installation — connected models, present binaries, enabled engines — not from a canned list.
 - **Decision engine (optional).** Plug in a System One model and ORCA gets calibrated judgments in ~0.2 s: smarter auto-routing, semantic command-risk review, verification of every answer (garbled, promised-but-not-done, wrong language), re-ranked web results.
 - **Three ways to chat.** Direct, side-by-side comparison, or blind battle with a local leaderboard.
