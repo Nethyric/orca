@@ -76,8 +76,8 @@ ORCA_VAULT_KEY=... npm run dist:win   # → release/ORCA-Agent-<version>-win-x64
 ### Release
 
 ```bash
-npm version 0.0.2 --no-git-tag-version   # or edit package.json
-git commit -am "0.0.2" && git tag v0.0.2 && git push && git push --tags
+npm version 0.0.3 --no-git-tag-version   # or edit package.json
+git commit -am "0.0.3" && git tag v0.0.3 && git push && git push --tags
 ```
 
 The **Release** workflow builds the portable zip, writes `SHA256SUMS`, attaches `remote/vault.json`, and publishes the GitHub Release. Installed apps pick it up on their next check.

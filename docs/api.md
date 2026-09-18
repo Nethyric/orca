@@ -32,7 +32,7 @@ All request and response bodies are JSON (`content-type: application/json`) unle
 ### `GET /api/health`
 
 ```json
-{ "ok": true, "version": "0.0.2", "builtin": true, "vault": true, "repo": "Nethyric/orca",
+{ "ok": true, "version": "0.0.3", "builtin": true, "vault": true, "repo": "Nethyric/orca",
   "tools": ["run_shell", "…"], "electron": false,
   "bins": { "ffmpeg": true, "ytdlp": true, "chrome": true }, "vision": false,
   "judge": { "configured": false, "enabled": false, "model": "jev-latest", "cooling": false, "stats": { "calls": 0, "ok": 0, "failed": 0, "inputTokens": 0, "outputTokens": 0, "avgMs": 0, "lastError": "" } } }
@@ -193,7 +193,7 @@ Returns the public view of the configuration: everything in `config.json` with s
   "models": [ { "key": "auto", "label": "ORCA", "tier": "auto", "builtin": true },
               { "key": "minimax", "label": "MiniMax M2.7", "vendor": "MiniMax", "tier": "strong", "builtin": true, "ready": true },
               { "key": "groq/llama-3.3-70b-versatile", "label": "llama-3.3-70b-versatile", "vendor": "Groq", "builtin": false, "ready": true } ],
-  "builtin": true, "version": "0.0.2", "dataDir": "…", "workspaceDir": "…",
+  "builtin": true, "version": "0.0.3", "dataDir": "…", "workspaceDir": "…",
   "app": { "name": "ORCA", "company": "Nethyric", "repo": "Nethyric/orca", "homepage": "…" }
 }
 ```
