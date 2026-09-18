@@ -12,6 +12,16 @@ All notable changes to ORCA are documented here. The format follows [Keep a Chan
 - Big-project playbook in the prompt: multi-page sites, shops and dashboards are scaffolded from a todo list (shared design tokens, one file per page/module, JSON data), written in ≤100-line chunks, every page verified with `browser_check`, finished with a project map.
 - `GET /api/health` reports `bins.chrome` and `judge`; `GET /api/judge/status`, `POST /api/judge/test`; SSE `verdict` event and `judged` on `tool_call`/`approval`.
 
+### Changed
+- Auto mode turns **Web mode** on by itself for research-type questions (news, "is X released yet", prices, comparisons, anything that needs today's facts), so the answer is searched and sourced without flipping the toggle.
+- `git checkout -- …`, `git restore`, `git reset --hard`, `git clean -f` and similar tree-rewriting git commands count as destructive (approval in Ask and Auto modes), like `rm -rf`.
+- Step budget stretches for big builds: while the recent steps keep writing files successfully, the limit grows (up to twice) instead of stopping a multi-page site halfway.
+- The language check never rewrites an answer when the user's rules, persona or notes ask for a specific language.
+
+### Fixed
+- A model call can no longer hang a step for minutes: hard 90 s budget per call, 15 s connect timeout on retry sweeps, and models that go silent count toward outage detection.
+- A stream that the provider drops a few characters into a tool call is retried on the next key/model instead of being reported to the model as a "truncated call" it then repeats.
+
 ## [0.0.2] — 2026-09-17
 
 ### Fixed
