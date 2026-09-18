@@ -46,10 +46,10 @@ function memorySnippet() {
 }
 
 const STR = {
-  fa: { busyWait: (s) => `همهٔ مدل‌ها شلوغ‌اند — ${s} ثانیهٔ دیگر دوباره تلاش می‌شود`, vaultDown: 'مدل‌های داخلی در دسترس نیستند (اتصال به GitHub برقرار نشد). کلید خودتان را در تنظیمات اضافه کنید یا بعداً دوباره امتحان کنید.', thinking: (m, s) => `${m} در حال فکر کردن… (مرحلهٔ ${s})`, fallback: (a, b) => `↩︎ ${a} در دسترس نبود — سوییچ به ${b}`, retry: (e) => `⚠ ${e} — تلاش مجدد`, empty: 'پاسخ خالی بود — درخواست پاسخ نهایی', allFailed: 'همهٔ مدل‌ها ناموفق بودند. آخرین خطا: ', cap: '⚠️ به سقف مراحل رسیدم. اگر بخواهید ادامه می‌دهم — بگویید «ادامه بده».', running: (n) => `اجرای ${n} ابزار به‌صورت موازی…`, noAnswer: '(پاسخ خالی)', compacting: 'گفتگو طولانی شد — فشرده‌سازی خودکار تاریخچه…', continuing: 'ادامهٔ پاسخ…' },
-  en: { busyWait: (s) => `All models are busy — retrying in ${s} s`, vaultDown: 'Built-in models unavailable (could not reach GitHub). Add your own key in Settings or try again later.', thinking: (m, s) => `${m} is thinking… (step ${s})`, fallback: (a, b) => `↩︎ ${a} unavailable — switched to ${b}`, retry: (e) => `⚠ ${e} — retrying`, empty: 'Empty answer — requesting final answer', allFailed: 'All models failed. Last error: ', cap: '⚠️ Step limit reached. Say "continue" and I will carry on.', running: (n) => `running ${n} tools in parallel…`, noAnswer: '(empty answer)', compacting: 'Long conversation — auto-compacting history…', continuing: 'continuing…' },
-  ru: { busyWait: (s) => `Все модели заняты — повтор через ${s} с`, vaultDown: 'Встроенные модели недоступны (нет связи с GitHub). Добавьте свой ключ в настройках или повторите позже.', thinking: (m, s) => `${m} думает… (шаг ${s})`, fallback: (a, b) => `↩︎ ${a} недоступна — переключение на ${b}`, retry: (e) => `⚠ ${e} — повтор`, empty: 'Пустой ответ — запрашиваю финальный ответ', allFailed: 'Все модели недоступны. Последняя ошибка: ', cap: '⚠️ Достигнут лимит шагов. Напишите «продолжай», и я продолжу.', running: (n) => `выполняю ${n} инструментов параллельно…`, noAnswer: '(пустой ответ)', compacting: 'Долгий диалог — автоматическое сжатие истории…', continuing: 'продолжаю…' },
-  zh: { busyWait: (s) => `所有模型都忙 — ${s} 秒后重试`, vaultDown: '内置模型不可用（无法连接 GitHub）。请在设置中添加自己的密钥或稍后重试。', thinking: (m, s) => `${m} 正在思考…（第 ${s} 步）`, fallback: (a, b) => `↩︎ ${a} 不可用 — 已切换到 ${b}`, retry: (e) => `⚠ ${e} — 重试中`, empty: '回答为空 — 请求最终回答', allFailed: '所有模型均失败。最后错误：', cap: '⚠️ 已达到步骤上限。说“继续”我会接着做。', running: (n) => `并行运行 ${n} 个工具…`, noAnswer: '（空回答）', compacting: '对话过长 — 自动压缩历史…', continuing: '继续…' },
+  fa: { busyWait: (s) => `همهٔ مدل‌ها شلوغ‌اند — ${s} ثانیهٔ دیگر دوباره تلاش می‌شود`, vaultDown: 'مدل‌های داخلی در دسترس نیستند (اتصال به GitHub برقرار نشد). کلید خودتان را در تنظیمات اضافه کنید یا بعداً دوباره امتحان کنید.', thinking: (m, s) => `${m} در حال فکر کردن… (مرحلهٔ ${s})`, fallback: (a, b) => `↩︎ ${a} در دسترس نبود — سوییچ به ${b}`, retry: (e) => `⚠ ${e} — تلاش مجدد`, empty: 'پاسخ خالی بود — درخواست پاسخ نهایی', allFailed: 'همهٔ مدل‌ها ناموفق بودند. آخرین خطا: ', outage: (st) => `سرویس مدل‌ها در حال حاضر از کار افتاده (HTTP ${st} از همهٔ مدل‌های داخلی) — مشکل سمت ارائه‌دهنده است، نه دستگاه شما. چند دقیقهٔ دیگر دوباره تلاش کنید یا ارائه‌دهندهٔ خودتان را در تنظیمات → مدل‌ها اضافه کنید.`, cap: '⚠️ به سقف مراحل رسیدم. اگر بخواهید ادامه می‌دهم — بگویید «ادامه بده».', running: (n) => `اجرای ${n} ابزار به‌صورت موازی…`, noAnswer: '(پاسخ خالی)', compacting: 'گفتگو طولانی شد — فشرده‌سازی خودکار تاریخچه…', continuing: 'ادامهٔ پاسخ…' },
+  en: { busyWait: (s) => `All models are busy — retrying in ${s} s`, vaultDown: 'Built-in models unavailable (could not reach GitHub). Add your own key in Settings or try again later.', thinking: (m, s) => `${m} is thinking… (step ${s})`, fallback: (a, b) => `↩︎ ${a} unavailable — switched to ${b}`, retry: (e) => `⚠ ${e} — retrying`, empty: 'Empty answer — requesting final answer', allFailed: 'All models failed. Last error: ', outage: (st) => `The model service is down right now (HTTP ${st} from every built-in model) — this is on the provider's side, not your computer. Retry in a few minutes, or add your own provider in Settings → Models.`, cap: '⚠️ Step limit reached. Say "continue" and I will carry on.', running: (n) => `running ${n} tools in parallel…`, noAnswer: '(empty answer)', compacting: 'Long conversation — auto-compacting history…', continuing: 'continuing…' },
+  ru: { busyWait: (s) => `Все модели заняты — повтор через ${s} с`, vaultDown: 'Встроенные модели недоступны (нет связи с GitHub). Добавьте свой ключ в настройках или повторите позже.', thinking: (m, s) => `${m} думает… (шаг ${s})`, fallback: (a, b) => `↩︎ ${a} недоступна — переключение на ${b}`, retry: (e) => `⚠ ${e} — повтор`, empty: 'Пустой ответ — запрашиваю финальный ответ', allFailed: 'Все модели недоступны. Последняя ошибка: ', outage: (st) => `Сервис моделей сейчас недоступен (HTTP ${st} от всех встроенных моделей) — проблема на стороне провайдера, а не вашего компьютера. Повторите через несколько минут или добавьте своего провайдера в Настройки → Модели.`, cap: '⚠️ Достигнут лимит шагов. Напишите «продолжай», и я продолжу.', running: (n) => `выполняю ${n} инструментов параллельно…`, noAnswer: '(пустой ответ)', compacting: 'Долгий диалог — автоматическое сжатие истории…', continuing: 'продолжаю…' },
+  zh: { busyWait: (s) => `所有模型都忙 — ${s} 秒后重试`, vaultDown: '内置模型不可用（无法连接 GitHub）。请在设置中添加自己的密钥或稍后重试。', thinking: (m, s) => `${m} 正在思考…（第 ${s} 步）`, fallback: (a, b) => `↩︎ ${a} 不可用 — 已切换到 ${b}`, retry: (e) => `⚠ ${e} — 重试中`, empty: '回答为空 — 请求最终回答', allFailed: '所有模型均失败。最后错误：', outage: (st) => `模型服务当前不可用（所有内置模型均返回 HTTP ${st}）— 问题在服务商一侧，而非您的电脑。请几分钟后重试，或在 设置 → 模型 中添加自己的服务商。`, cap: '⚠️ 已达到步骤上限。说“继续”我会接着做。', running: (n) => `并行运行 ${n} 个工具…`, noAnswer: '（空回答）', compacting: '对话过长 — 自动压缩历史…', continuing: '继续…' },
 };
 const L = () => STR[config.load().lang] || STR.en;
 
@@ -589,7 +589,7 @@ async function callModel(modelKey, messages, opts) {
   for (let round = 0; ; round++) {
     try { return await callModelOnce(modelKey, messages, opts); }
     catch (e) {
-      if (signal?.aborted || !e.transient || round >= waits.length) throw e;
+      if (signal?.aborted || !e.transient || round >= waits.length || (e.outage && round >= 3)) throw e; // a full outage gets ~15 s of sweeps, a busy pool ~1 min
       const ms = waits[round];
       emit('status', { text: L().busyWait ? L().busyWait(Math.round(ms / 1000)) : `All models are busy — retrying in ${Math.round(ms / 1000)} s`, kind: 'retry' });
       await new Promise((res) => { const onAb = () => { clearTimeout(t); res(); }; const t = setTimeout(() => { signal?.removeEventListener('abort', onAb); res(); }, ms); signal?.addEventListener('abort', onAb, { once: true }); });
@@ -600,6 +600,7 @@ async function callModel(modelKey, messages, opts) {
 async function callModelOnce(modelKey, messages, { emit, signal, useTools = true, temperature, allowFallback = true }) {
   const order = allowFallback ? config.fallbackOrder(modelKey) : [modelKey];
   let last = '', transient = false, glitched = null, lastWhy = ''; // transient = at least one upstream was merely busy → worth another sweep
+  let fails = 0, srvFails = 0, lastStatus = 0; // every failure a 5xx → the provider is down, not busy: say so and stop sweeping sooner
   for (let i = 0; i < order.length; i++) {
     const logical = config.resolve(order[i]);
     if (!logical || !logical.apiKey) continue;
@@ -630,7 +631,7 @@ async function callModelOnce(modelKey, messages, { emit, signal, useTools = true
           return { ...res, used: order[i], label: actual };
         } catch (e) {
           if (signal?.aborted || e.name === 'AbortError') throw new Error('aborted');
-          last = `${cfg.label}: ${e.message}`;
+          last = `${cfg.label}: ${e.message}`; fails++; if (e.status >= 500 && e.status !== 504) { srvFails++; lastStatus = e.status; }
           if (emitted) emit('delta', { type: 'reset' });
           // human status instead of the raw provider JSON ("HTTP 429: {"error":{"code":"model_concurrency"…")
           const why = e.status === 429 ? 'busy' : e.status === 504 ? 'no response' : e.status >= 500 ? 'provider error ' + e.status : e.status === 401 || e.status === 403 ? 'key rejected' : e.status === 402 ? 'out of credit' : String(e.message || '').replace(/^HTTP \d+:\s*/, '').slice(0, 80);
@@ -645,7 +646,8 @@ async function callModelOnce(modelKey, messages, { emit, signal, useTools = true
     }
   }
   if (glitched) { emit('delta', { type: 'reset' }); if (glitched.reasoning) emit('delta', { type: 'reasoning', text: glitched.reasoning }); emit('delta', { type: 'content', text: glitched.content }); return glitched; }
-  const err = new Error(L().allFailed + last.replace(/HTTP (\d+): \{[\s\S]*$/, 'HTTP $1').slice(0, 200)); err.transient = transient; throw err;
+  const outage = fails >= 2 && srvFails === fails;
+  const err = new Error(outage && L().outage ? L().outage(lastStatus) : L().allFailed + last.replace(/HTTP (\d+): \{[\s\S]*$/, 'HTTP $1').slice(0, 200)); err.transient = transient; err.outage = outage; throw err;
 }
 
 // File paths mentioned in the conversation (the user's "save it as docs/x.md", the model's "I'll write src/app.js"),
@@ -818,10 +820,11 @@ async function runAgent(o) {
             emit('verdict', { garbage: v.garbage, promise: v.promise, done: v.done, langMismatch: v.langMismatch });
             const nudge = (why, instruction) => { o._judgeNudges = (o._judgeNudges || 0) + 1; carried = ''; msgs.push({ role: 'user', content: instruction }); api.push(msgs[msgs.length - 1]); emit('status', { text: L().retry(why), kind: 'retry' }); };
             const realSentence = lastUser && String(lastUser.content).replace(/<attached_[\s\S]*$/, '').trim().split(/\s+/).length >= 3;
+            const langRuled = /language|lang\b|زبان|фарси|язык|语言|persian|farsi|english|russian|chinese|فارسی|انگلیسی|روسی|چینی/i.test((c.rules || '') + ' ' + (c.persona || '') + ' ' + (o.notes || '')); // the user set a language policy → never second-guess it
             if ((o._judgeNudges || 0) < 2) {
               if (v.garbage != null && v.garbage >= 0.85 && !o._jGarbage) { o._jGarbage = true; emit('delta', { type: 'reset' }); nudge('answer looked garbled — regenerating', '[system] Your previous message was garbled (repeated fragments or leaked tokens) and was not shown to the user. Write the answer again, cleanly, once.'); continue; }
               if (v.promise != null && v.promise >= 0.8 && (v.done == null || v.done < 0.4) && (v.asksUser == null || v.asksUser < 0.5) && !o._jPromise) { o._jPromise = true; emit('delta', { type: 'reset' }); nudge('answer promised work instead of doing it — continuing', '[system] Your previous message only announced what you were going to do — nothing was done and the user did not see it. Do the work now with the tools (create the files, run the commands), then report what was actually done.'); continue; }
-              if (v.langMismatch != null && v.langMismatch >= 0.85 && realSentence && !o._jLang && text.length < 12000) { o._jLang = true; emit('delta', { type: 'reset' }); nudge('answer was in the wrong language — translating', '[system] Your previous message was written in a different language than the user\'s. Rewrite that same answer in the user\'s language (keep code, commands and paths as they are). Do not add anything else.'); continue; }
+              if (v.langMismatch != null && v.langMismatch >= 0.85 && realSentence && !langRuled && !o._jLang && text.length < 12000) { o._jLang = true; emit('delta', { type: 'reset' }); nudge('answer was in the wrong language — translating', '[system] Your previous message was written in a different language than the user\'s. Rewrite that same answer in the user\'s language (keep code, commands and paths as they are). Do not add anything else.'); continue; }
             }
           }
         }
