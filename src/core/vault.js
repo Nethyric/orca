@@ -127,11 +127,17 @@ function candidates(alias) {
   return [...primary.slice(start), ...primary.slice(0, start), ...rest];
 }
 function liveCount(alias) { const v = current(); if (!v) return 0; return ((v.upstreams || {})[alias] || []).filter(isLive).length; }
-function markBad(u, status) {
+function markBad(u, status, err) {
   const id = u.id || u.key;
-  // 401/402/403 = dead or out of credit → rest 6 h; 429 = busy → 20 s; 5xx → 15 s (free pools clear in seconds; a long rest just hides a live key)
+  // 401/402/403 = dead or out of credit → rest 6 h; 429 = busy → 8 s (or the gateway's Retry-After, capped at 2 min;
+  // a free tier whose DAILY quota is used up rests until it resets); 5xx → 10 s (free pools clear in seconds; a long rest just hides a live key)
   const dead = [401, 402, 403].includes(status);
-  const ms = dead ? 6 * 3600e3 : status === 429 ? 8e3 : 10e3;
+  let ms = dead ? 6 * 3600e3 : status === 429 ? 8e3 : 10e3;
+  if (status === 429 && err) {
+    if (err.rateDay === '0') ms = 3600e3; // daily cap hit — re-check hourly
+    else if (err.retryAfter > 0) ms = Math.min(err.retryAfter * 1000 + 500, 120e3);
+    else if (/per-day|daily|RPD/i.test(err.message || '')) ms = 3600e3;
+  }
   disabled.set(id, Date.now() + ms);
   if (dead && u.key) disabled.set('key:' + u.key, Date.now() + ms); // the same key serves other aliases too — don't probe it again there
 }

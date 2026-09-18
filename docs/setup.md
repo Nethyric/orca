@@ -2,21 +2,42 @@
 
 ## Requirements
 
-| | Release build (Windows) | From source |
+| | Release builds | From source |
 |---|---|---|
-| OS | Windows 10/11 x64 | Windows, macOS, Linux |
+| OS | Windows 10/11 x64 · macOS 12+ (x64, arm64) · Linux x64 (glibc 2.31+) | Windows, macOS, Linux |
 | Runtime | none (bundled) | Node.js ≥ 20, npm |
 | Optional | Python 3 (`run_python`), Chrome/Edge (`screenshot`, `browser_check`) | same, plus `ffmpeg`/`yt-dlp` on PATH for media tools |
 
-## Install a release (Windows)
+## Install a release
 
-1. Download `ORCA-Agent-<version>-win-x64.zip` from [Releases](https://github.com/Nethyric/orca/releases/latest).
-2. Verify (optional): compare the file's SHA-256 with the `SHA256SUMS` asset.
-3. Extract anywhere (e.g. `C:\Apps\ORCA`) and run `ORCA.exe`. Nothing is installed system-wide; delete the folder to uninstall.
+All assets are on the [Releases](https://github.com/Nethyric/orca/releases/latest) page together with `SHA256SUMS` (verify with `sha256sum -c SHA256SUMS --ignore-missing` or `certutil -hashfile <file> SHA256`).
+
+### Windows
+
+1. Download `ORCA-Agent-<version>-win-x64.zip`.
+2. Extract anywhere (e.g. `C:\Apps\ORCA`) and run `ORCA.exe`. Nothing is installed system-wide; delete the folder to uninstall.
 
 Windows SmartScreen may warn because the executable is not code-signed — choose *More info → Run anyway*.
 
-Updates: ORCA checks GitHub Releases on start and every few hours, shows a banner with release notes, downloads the zip, verifies its hash and swaps itself in place on restart (Settings → Updates).
+### macOS
+
+1. Download `ORCA-Agent-<version>-mac-arm64.dmg` (Apple Silicon) or `ORCA-Agent-<version>-mac-x64.dmg` (Intel); the `.zip` variants contain the same app bundle.
+2. Open the image and drag **ORCA Agent** to *Applications*.
+3. First launch: the app is not notarized, so right-click → *Open* → *Open* (once), or run `xattr -dr com.apple.quarantine "/Applications/ORCA Agent.app"`.
+
+### Linux
+
+- **AppImage** (any distribution): `chmod +x ORCA-Agent-<version>-linux-x64.AppImage && ./ORCA-Agent-<version>-linux-x64.AppImage`. Needs FUSE 2 (`sudo apt install libfuse2` on Ubuntu 22.04+); without it, run with `--appimage-extract-and-run`.
+- **tar.gz**: `tar xzf ORCA-Agent-<version>-linux-x64.tar.gz && ./ORCA-Agent-<version>-linux-x64/orca-agent`.
+- On hardened kernels that block unprivileged user namespaces, add `--no-sandbox`.
+
+### Updates
+
+ORCA checks GitHub Releases on start and every few hours and shows a banner with the release notes (Settings → Updates). The package for your platform and CPU is downloaded and verified against `SHA256SUMS`, then:
+
+- **Windows**: the app swaps itself in place and restarts.
+- **Linux AppImage**: the AppImage file is replaced in place and relaunched.
+- **macOS / Linux tar.gz**: the verified package is revealed in your file manager — drop it over the current install and relaunch.
 
 ## Run from source
 
@@ -56,11 +77,13 @@ Both can be changed: the workspace in **Settings → General**, the data folder 
 ## Build
 
 ```bash
-npm run fetch-bins                    # once
-ORCA_VAULT_KEY=... npm run dist:win   # → release/ORCA-Agent-<version>-win-x64.zip
+npm run fetch-bins                      # once per target platform (ORCA_TARGET=win|mac|linux, ORCA_ARCH=x64|arm64)
+ORCA_VAULT_KEY=... npm run dist:win     # → release/ORCA-Agent-<version>-win-x64.zip          (builds on any OS)
+ORCA_VAULT_KEY=... npm run dist:mac     # → release/ORCA-Agent-<version>-mac-{x64,arm64}.{zip,dmg}   (macOS only)
+ORCA_VAULT_KEY=... npm run dist:linux   # → release/ORCA-Agent-<version>-linux-x64.{AppImage,tar.gz}
 ```
 
-`scripts/bake.js` writes `src/build-info.json` (vault key, commit, build time) which is git-ignored and packed into the app. The Windows build runs on Linux/macOS too (no Wine needed: `signAndEditExecutable` is off; `scripts/finish-win.js` renames the exe and zips the folder).
+`scripts/bake.js` writes `src/build-info.json` (vault key, commit, build time) which is git-ignored and packed into the app. The Windows build runs on Linux/macOS too (no Wine needed: `signAndEditExecutable` is off; `scripts/finish-win.js` renames the exe and zips the folder). macOS builds are unsigned (`identity: null`); Linux builds bundle `ffmpeg`/`yt-dlp` for x64.
 
 ## Maintainers
 
@@ -76,11 +99,11 @@ ORCA_VAULT_KEY=... npm run dist:win   # → release/ORCA-Agent-<version>-win-x64
 ### Release
 
 ```bash
-npm version 0.0.3 --no-git-tag-version   # or edit package.json
-git commit -am "0.0.3" && git tag v0.0.3 && git push && git push --tags
+npm version 0.0.4 --no-git-tag-version   # or edit package.json
+git commit -am "0.0.4" && git tag v0.0.4 && git push && git push --tags
 ```
 
-The **Release** workflow builds the portable zip, writes `SHA256SUMS`, attaches `remote/vault.json`, and publishes the GitHub Release. Installed apps pick it up on their next check.
+The **Release** workflow builds all three platforms in parallel (Windows on Ubuntu, macOS on `macos-14`, Linux on Ubuntu), merges one `SHA256SUMS`, attaches `remote/vault.json`, and publishes the GitHub Release. Installed apps pick it up on their next check.
 
 ### Rotate or replace built-in keys
 

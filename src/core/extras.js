@@ -4,6 +4,7 @@
 // grep / glob / todo list / sub-agent tasks / diagnostics / project memory (ORCA.md).
 const fs = require('fs');
 const path = require('path');
+const APP_UA = `ORCA/${require('../../package.json').version} (${process.platform}; ${process.arch}; +https://github.com/Nethyric/orca)`;
 const os = require('os');
 const { spawn, execSync } = require('child_process');
 const config = require('./config');
@@ -140,6 +141,11 @@ function makeTools({ safe, rel, WS }) {
     for (const [, p] of Object.entries(pv)) { const m = (p.models || []).find((x) => x.attachment); if ((p.apiKey || p.local) && m && p.baseUrl) return { baseUrl: p.baseUrl.replace(/\/+$/, ''), apiKey: p.apiKey || '', model: m.id }; }
     // 3) legacy: a bare key + model typed directly
     if (v.model && v.apiKey && v.baseUrl) return { baseUrl: v.baseUrl.replace(/\/+$/, ''), apiKey: v.apiKey, model: v.model };
+    // 4) built-in: a vault upstream flagged as vision-capable (works out of the box, no user key)
+    try {
+      const vault = require('./vault'); const cur = vault.current();
+      if (cur && cur.upstreams) for (const list of Object.values(cur.upstreams)) { const live = (list || []).find((x) => x.vision && x.url && x.key && x.model); if (live) return { baseUrl: String(live.url).replace(/\/+$/, ''), apiKey: live.key, model: live.model, builtin: true }; }
+    } catch (_) {}
     return null;
   }
   async function describeWithVision(absPath, question) {
@@ -147,10 +153,14 @@ function makeTools({ safe, rel, WS }) {
     const meta = imageMeta(absPath);
     const mime = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp' }[meta.format] || 'image/png';
     const b64 = fs.readFileSync(absPath).toString('base64');
-    const body = { model: vm.model, max_tokens: 900, messages: [{ role: 'user', content: [{ type: 'text', text: question || 'Describe this image in detail. Transcribe any text exactly. If it is a screenshot of code or an error, quote it verbatim.' }, { type: 'image_url', image_url: { url: `data:${mime};base64,${b64}` } }] }] };
-    const r = await fetchJson(vm.baseUrl + '/chat/completions', { method: 'POST', headers: { authorization: 'Bearer ' + vm.apiKey, 'content-type': 'application/json' }, body: JSON.stringify(body) }, 90000);
+    // reasoning models spend part of the budget thinking before they describe — give them room
+    const body = { model: vm.model, max_tokens: 1800, messages: [{ role: 'user', content: [{ type: 'text', text: question || 'Describe this image in detail. Transcribe any text exactly. If it is a screenshot of code or an error, quote it verbatim.' }, { type: 'image_url', image_url: { url: `data:${mime};base64,${b64}` } }] }] };
+    const r = await fetchJson(vm.baseUrl + '/chat/completions', { method: 'POST', headers: { authorization: 'Bearer ' + vm.apiKey, 'content-type': 'application/json', 'User-Agent': APP_UA }, body: JSON.stringify(body) }, 90000);
     if (r.status >= 400 || !r.json) throw new Error(`vision model HTTP ${r.status}: ${r.text.slice(0, 200)}`);
-    return { model: vm.model, text: (r.json.choices?.[0]?.message?.content || '').trim() };
+    const m = r.json.choices?.[0]?.message || {};
+    let text = String(m.content || '').replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+    if (!text && (m.reasoning_content || m.reasoning)) text = String(m.reasoning_content || m.reasoning).trim().slice(-1500); // budget ran out inside the thinking — the thinking still describes the picture
+    return { model: vm.model, text };
   }
   async function analyzeImage(absPath, { question, ocr = true, langs } = {}) {
     const meta = imageMeta(absPath);
@@ -642,7 +652,7 @@ f.addEventListener('load',()=>{try{hook(f.contentWindow)}catch(e){errs.push('no 
     { type: 'function', function: { name: 'project_init', description: 'Create ORCA.md project memory in the workspace (like AGENTS.md/CLAUDE.md): scanned structure + sections for commands, conventions, decisions. Then fill it in with edit_file. It is loaded automatically in every future chat.', parameters: { type: 'object', properties: { overwrite: { type: 'boolean' } } } } },
     { type: 'function', function: { name: 'task', description: 'Delegate a self-contained sub-task to a sub-agent with its own fresh context (e.g. "research X and report", "explore the codebase and summarize the architecture", "write and test module Y"). It has the same tools and returns a final report. Use for parallelizable or context-heavy work; call several in one turn to run them in parallel.', parameters: { type: 'object', properties: { description: { type: 'string', description: '3-6 word label' }, prompt: { type: 'string', description: 'complete, self-contained instructions' }, model: { type: 'string' }, max_steps: { type: 'integer' } }, required: ['description', 'prompt'] } } },
   ];
-  return { impl, SCHEMAS, setCurrentChat, projectMemory, loadTodos, setSubagentRunner: (fn) => { runSubagent = fn; }, analyzeImage, findBin, visionModel, findChrome };
+  return { impl, SCHEMAS, setCurrentChat, projectMemory, loadTodos, setSubagentRunner: (fn) => { runSubagent = fn; }, analyzeImage, describeWithVision, findBin, visionModel, findChrome };
 }
 
 module.exports = { makeTools, findBin, UA };

@@ -4,6 +4,29 @@ All notable changes to ORCA are documented here. The format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.0.4] — 2026-09-18
+
+### Added
+- **macOS and Linux builds.** Every release now ships `ORCA-Agent-<version>-mac-{x64,arm64}.{dmg,zip}` and `ORCA-Agent-<version>-linux-x64.{AppImage,tar.gz}` next to the Windows zip, built in parallel by the release workflow with one merged `SHA256SUMS`. Platform binaries (`ffmpeg`, `yt-dlp`) are bundled per target; `npm run dist:mac` / `dist:linux`; `scripts/fetch-bins.js` takes `ORCA_TARGET`/`ORCA_ARCH`.
+- **Live preview** (right panel → Preview): HTML pages the agent writes open inside the app in a browser-style frame with **phone (390×844) / tablet (820×1180) / desktop** presets, rotate, reload, **full-window** mode (Esc to leave) and open-in-browser. Device frames render at real device width and scale to the panel. After `scaffold_site` or a write to `index.html` the preview opens by itself.
+- **Help center** (rail → Help, `F1`, `/help`, command palette): getting started, modes and autonomy levels, slash commands and shortcuts, about/privacy/updates — in all four UI languages. The chat `/help` reply is rewritten to match.
+- **Fourth built-in model — Glimmer 30B** (`glimmer`, tier *vision*): a vision-capable model that reads photos, screenshots and UI mock-ups. It is also used as the built-in **vision engine**, so `view_image` and image attachments get a real visual description out of the box (previously OCR only unless a key was added). Free-tier rate limits (5 requests/min, 200/day) are respected automatically: the pool honours `Retry-After` and daily-quota headers and rests the key until the limit clears instead of hammering it.
+- Additional built-in upstreams for MiniMax M2.7 and DeepSeek V4 Flash on a second gateway — the rotation now spans two independent providers, so a single-provider outage no longer takes the built-in models down.
+- **Decision engine in the provider editor**: Settings → Models → Add provider now lists *Decision engine — System One (TypeSafe)*; picking it shows what it is (typed judgments, not a chat model), pre-fills URL and model, tests the key and saves to the same setting as Settings → Agent.
+- Provider catalog: the gateway used by the built-in pool is listed as a regular provider (bring your own key). For gateways that publish a public `/models` endpoint, the model picker is filled live with pricing, context and capability flags; free models are listed first. `ROUTEWAY_API_KEY` is recognised.
+- `ORCA_DEBUG=1` prints one line per model call (model, host, latency, finish reason, sizes, tool calls) to stderr.
+
+### Changed
+- **Update banner** redesigned: a floating pill with an animated update glyph, download progress, close button; the installed/latest state in Settings → Updates uses the same language. On macOS and Linux the button reads *Install*; after verification the package is revealed in the file manager (Linux AppImage replaces itself in place and relaunches, like Windows).
+- Updater picks the asset for the running OS **and CPU** (`mac-arm64` vs `mac-x64`, AppImage vs tar.gz) and verifies it against the merged `SHA256SUMS`.
+- All outbound model/gateway requests send a product `User-Agent`; some edge filters reject bare clients with 403.
+- Model catalog discovery keeps `pricing`, `capabilities` and `available` from gateway responses; unavailable models are hidden.
+- Vision descriptions tolerate reasoning models (larger budget, `<think>` stripped, reasoning used when the answer was cut).
+
+### Fixed
+- Empty assistant turns are no longer sent back to strict gateways (`Invalid assistant message: provide non-whitespace content`) — the retry after an empty answer now carries a placeholder.
+- `Escape` closes the full-window preview before it stops a running task.
+
 ## [0.0.3] — 2026-09-18
 
 ### Added

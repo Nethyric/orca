@@ -93,8 +93,12 @@ async function checkForUpdates(force = false) {
     if (!rel) throw new Error(gh ? `GitHub HTTP ${gh.status}` : 'offline');
     const latest = String(rel.tag_name).replace(/^v/, '');
     const assets = (rel.assets || []).map((a) => ({ name: a.name, url: a.browser_download_url, size: a.size }));
-    const plat = process.platform === 'win32' ? /win.*x64.*\.zip$/i : process.platform === 'darwin' ? /mac.*\.(zip|dmg)$/i : /linux.*\.(AppImage|zip|tar\.gz)$/i;
-    const asset = assets.find((a) => plat.test(a.name)) || null;
+    // pick the asset for this machine: Windows portable zip · macOS zip for this CPU (dmg as fallback) · Linux AppImage (tar.gz as fallback)
+    const arch = process.arch === 'arm64' ? '(arm64|aarch64)' : '(x64|x86_64|amd64)';
+    const prefs = process.platform === 'win32' ? [/win.*x64.*\.zip$/i]
+      : process.platform === 'darwin' ? [new RegExp(`mac.*${arch}.*\\.zip$`, 'i'), new RegExp(`mac.*${arch}.*\\.dmg$`, 'i'), /mac.*\.(zip|dmg)$/i]
+      : (process.env.APPIMAGE ? [new RegExp(`linux.*${arch}.*\\.AppImage$`, 'i'), new RegExp(`linux.*${arch}.*\\.tar\\.gz$`, 'i')] : [new RegExp(`linux.*${arch}.*\\.tar\\.gz$`, 'i'), new RegExp(`linux.*${arch}.*\\.AppImage$`, 'i')]).concat([/linux.*\.(AppImage|zip|tar\.gz)$/i]);
+    let asset = null; for (const re of prefs) { asset = assets.find((a) => re.test(a.name)) || null; if (asset) break; }
     const sums = assets.find((a) => /SHA256SUMS/i.test(a.name)) || null;
     updState = {
       checkedAt: Date.now(), available: cmpVer(latest, VERSION) > 0, version: VERSION, latest,
@@ -107,8 +111,8 @@ async function checkForUpdates(force = false) {
 }
 function updateState() { return updState; }
 
-// Portable Windows self-update: download zip → verify sha256 → extract next to the app → write a small
-// updater script that swaps folders after the app exits. (NSIS/installer builds should use electron-updater instead.)
+// Self-update: download → verify sha256 against SHA256SUMS → Windows: extract beside the app and swap folders after exit;
+// Linux AppImage: replace the file in place and relaunch; macOS / Linux tar.gz: reveal the verified package for a drag-and-drop install.
 let dl = { active: false, pct: 0, bytes: 0, total: 0, error: '', ready: false, path: '' };
 function downloadState() { return dl; }
 async function downloadUpdate(onProgress) {
@@ -143,7 +147,20 @@ function applyUpdate() {
   let pend; try { pend = JSON.parse(fs.readFileSync(path.join(dir, 'pending.json'), 'utf8')); } catch (_) { throw new Error('no downloaded update'); }
   if (!fs.existsSync(pend.zip)) throw new Error('update file missing');
   const exe = process.execPath; const appDir = path.dirname(exe);
-  if (process.platform !== 'win32') { return { manual: true, zip: pend.zip, note: 'Extract the archive over the current app folder and restart.' }; }
+  const q = (v) => `'${String(v).replace(/'/g, `'\\''`)}'`;
+  if (process.platform === 'linux' && process.env.APPIMAGE && /\.AppImage$/i.test(pend.zip)) {
+    // AppImage: swap the single file in place after we exit, then relaunch it
+    const target = process.env.APPIMAGE; const tmp = target + '.new';
+    fs.copyFileSync(pend.zip, tmp); fs.chmodSync(tmp, 0o755);
+    const sh = `while kill -0 ${process.pid} 2>/dev/null; do sleep 0.4; done; sleep 0.5; mv -f ${q(tmp)} ${q(target)}; rm -f ${q(pend.zip)} ${q(path.join(dir, 'pending.json'))}; nohup ${q(target)} >/dev/null 2>&1 &`;
+    spawn('/bin/sh', ['-c', sh], { detached: true, stdio: 'ignore' }).unref();
+    return { restarting: true };
+  }
+  if (process.platform !== 'win32') {
+    // macOS (.zip/.dmg) and Linux tar.gz: the package is downloaded and verified — reveal it so the user can drop it in place
+    try { if (process.platform === 'darwin') spawn('open', ['-R', pend.zip], { detached: true, stdio: 'ignore' }).unref(); else spawn('xdg-open', [path.dirname(pend.zip)], { detached: true, stdio: 'ignore' }).unref(); } catch (_) {}
+    return { manual: true, zip: pend.zip, note: process.platform === 'darwin' ? 'Open the downloaded package and drag ORCA Agent to Applications, then relaunch.' : 'Extract the archive over the current app folder and restart.' };
+  }
   const stage = path.join(dir, 'stage'); fs.rmSync(stage, { recursive: true, force: true }); fs.mkdirSync(stage, { recursive: true });
   const ps = [
     `$ErrorActionPreference='Stop'`,

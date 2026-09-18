@@ -7,16 +7,18 @@ const path = require('path');
 const config = require('./config');
 
 const SRC = 'https://models.dev/api.json';
+const UA = `ORCA/${require('../../package.json').version} (${process.platform}; ${process.arch}; +https://github.com/Nethyric/orca)`;
 const TTL = 24 * 3600e3;
 let mem = null, memAt = 0;
 function cacheFile() { return path.join(config.getDataDir(), 'models-dev.json'); }
 
 // Curated order + hints so the picker feels like a product, not a dump. Everything else follows alphabetically.
-const FEATURED = ['openai', 'anthropic', 'google', 'openrouter', 'deepseek', 'xai', 'groq', 'mistral', 'togetherai', 'fireworks-ai', 'cerebras', 'zhipuai', 'moonshotai', 'minimax', 'nvidia', 'huggingface', 'github-copilot', 'lmstudio', 'ollama', 'requesty', 'chutes', 'nebius', 'deepinfra', 'perplexity', 'cohere', 'llama', 'tokenrouter', 'dahl'];
+const FEATURED = ['openai', 'anthropic', 'google', 'openrouter', 'routeway', 'deepseek', 'xai', 'groq', 'mistral', 'togetherai', 'fireworks-ai', 'cerebras', 'zhipuai', 'moonshotai', 'minimax', 'nvidia', 'huggingface', 'github-copilot', 'lmstudio', 'ollama', 'requesty', 'chutes', 'nebius', 'deepinfra', 'perplexity', 'cohere', 'llama', 'tokenrouter', 'dahl'];
 // Providers models.dev does not list (or lists with a non-OpenAI api) but people use daily.
 const EXTRA = {
   ollama:  { id: 'ollama', name: 'Ollama (local)', api: 'http://127.0.0.1:11434/v1', env: [], local: true, models: {} },
   dahl:    { id: 'dahl', name: 'Dahl', api: 'https://inference.dahl.global/v1', env: ['DAHL_API_KEY'], models: {} },
+  routeway: { id: 'routeway', name: 'Routeway', api: 'https://api.routeway.ai/v1', env: ['ROUTEWAY_API_KEY'], doc: 'https://docs.routeway.ai', models: {} },
   custom:  { id: 'custom', name: 'Custom OpenAI-compatible', api: '', env: [], models: {} },
 };
 // Native-API base URLs for providers whose models.dev entry has api=null (they publish a first-party SDK only).
@@ -53,15 +55,17 @@ async function db(force) { const d = await fetchDb(force); return { ...EXTRA, ..
 
 async function list(force) {
   const d = await db(force);
-  const rows = Object.entries(d).map(([id, p]) => ({ id, name: p.name || id, api: p.api || BASES[id] || '', env: p.env || [], count: Object.keys(p.models || {}).length, local: !!p.local, anthropic: /anthropic\.com/.test(p.api || BASES[id] || '') }));
+  const rows = Object.entries(d).map(([id, p]) => ({ id, name: p.name || id, api: p.api || BASES[id] || '', env: p.env || [], count: Object.keys(p.models || {}).length, local: !!p.local, doc: p.doc || '', anthropic: /anthropic\.com/.test(p.api || BASES[id] || '') }));
   const rank = (id) => { const i = FEATURED.indexOf(id); return i === -1 ? 999 : i; };
   rows.sort((a, b) => rank(a.id) - rank(b.id) || a.name.localeCompare(b.name));
   return { providers: rows, featured: FEATURED, fetchedAt: memAt };
 }
 async function models(id) {
   const d = await db(false); const p = d[id]; if (!p) return { models: [] };
-  const ms = Object.values(p.models || {});
-  ms.sort((a, b) => (b.date || '').localeCompare(a.date || '') || a.name.localeCompare(b.name));
+  let ms = Object.values(p.models || {});
+  // gateways that publish a public /models list (no key needed): fill the picker live when the mirror has nothing
+  if (!ms.length && EXTRA[id] && EXTRA[id].api) { try { ms = await discover({ baseUrl: EXTRA[id].api }); } catch (_) { ms = []; } }
+  ms.sort((a, b) => (b.free ? 1 : 0) - (a.free ? 1 : 0) || (b.date || '').localeCompare(a.date || '') || a.name.localeCompare(b.name));
   return { id, name: p.name, api: p.api || BASES[id] || '', env: p.env || [], models: ms };
 }
 // Live discovery: GET {baseUrl}/models (works for OpenAI, OpenRouter, Groq, Ollama, LM Studio, vLLM, …; Anthropic too).
@@ -69,7 +73,7 @@ async function discover({ baseUrl, apiKey, api }) {
   const base = String(baseUrl || '').replace(/\/+$/, '');
   if (!base) throw new Error('baseUrl required');
   const anth = api === 'anthropic' || /anthropic\.com/.test(base);
-  const headers = anth ? { 'x-api-key': apiKey || '', 'anthropic-version': '2023-06-01' } : { authorization: 'Bearer ' + (apiKey || '') };
+  const headers = { 'User-Agent': UA, ...(anth ? { 'x-api-key': apiKey || '', 'anthropic-version': '2023-06-01' } : { authorization: 'Bearer ' + (apiKey || '') }) };
   const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 12000);
   try {
     const r = await fetch(base + '/models', { headers, signal: ctl.signal });
@@ -77,7 +81,19 @@ async function discover({ baseUrl, apiKey, api }) {
     if (!r.ok) throw Object.assign(new Error(`HTTP ${r.status}: ${txt.slice(0, 200)}`), { status: r.status });
     const j = JSON.parse(txt);
     const arr = Array.isArray(j.data) ? j.data : Array.isArray(j.models) ? j.models : Array.isArray(j) ? j : [];
-    return arr.map((m) => ({ id: m.id || m.name || m.model, name: m.display_name || m.name || m.id, context: m.context_length || m.context_window || 0, owned: m.owned_by || '' })).filter((m) => m.id).sort((a, b) => a.id.localeCompare(b.id)).slice(0, 2000);
+    const price = (m, k) => { const p = m.pricing && m.pricing[k]; if (p == null) return null; const v = typeof p === 'object' ? p.price_per_million_t : Number(p) * 1e6; return Number.isFinite(v) ? v : null; };
+    return arr.map((m) => {
+      const id = m.id || m.name || m.model; const caps = m.capabilities || m.architecture || {};
+      const inp = price(m, 'input') ?? price(m, 'prompt'), out = price(m, 'output') ?? price(m, 'completion');
+      const row = { id, name: m.display_name || m.short_name || m.name || id, context: m.context_length || m.context_window || 0, owned: m.owned_by || '' };
+      if (typeof caps.function_call === 'boolean') row.toolCall = caps.function_call; else if (Array.isArray(m.supported_parameters)) row.toolCall = m.supported_parameters.includes('tools');
+      if (typeof caps.reasoning === 'boolean') row.reasoning = caps.reasoning;
+      if (typeof caps.vision === 'boolean') row.attachment = caps.vision; else if (Array.isArray(caps.input_modalities)) row.attachment = caps.input_modalities.includes('image');
+      if (inp != null) row.input = inp; if (out != null) row.outputCost = out;
+      if (/:free$/.test(String(id)) || (inp === 0 && out === 0)) row.free = true;
+      if (m.available === false) row.unavailable = true;
+      return row;
+    }).filter((m) => m.id && !m.unavailable).sort((a, b) => (b.free ? 1 : 0) - (a.free ? 1 : 0) || a.id.localeCompare(b.id)).slice(0, 2000);
   } finally { clearTimeout(t); }
 }
 async function probe({ baseUrl, apiKey, model, api }) {
@@ -87,11 +103,11 @@ async function probe({ baseUrl, apiKey, model, api }) {
   const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 40000);
   try {
     if (anth) {
-      const r = await fetch(base + '/messages', { method: 'POST', signal: ctl.signal, headers: { 'x-api-key': apiKey || '', 'anthropic-version': '2023-06-01', 'content-type': 'application/json' }, body: JSON.stringify({ model, max_tokens: 20, messages: [{ role: 'user', content: 'Reply with the single word: OK' }] }) });
+      const r = await fetch(base + '/messages', { method: 'POST', signal: ctl.signal, headers: { 'User-Agent': UA, 'x-api-key': apiKey || '', 'anthropic-version': '2023-06-01', 'content-type': 'application/json' }, body: JSON.stringify({ model, max_tokens: 20, messages: [{ role: 'user', content: 'Reply with the single word: OK' }] }) });
       const txt = await r.text(); if (!r.ok) throw Object.assign(new Error(`HTTP ${r.status}: ${txt.slice(0, 200)}`), { status: r.status });
       const j = JSON.parse(txt); return (j.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('');
     }
-    const r = await fetch(base + '/chat/completions', { method: 'POST', signal: ctl.signal, headers: { authorization: 'Bearer ' + (apiKey || ''), 'content-type': 'application/json' }, body: JSON.stringify({ model, messages: [{ role: 'user', content: 'Reply with the single word: OK' }], max_tokens: 200 }) });
+    const r = await fetch(base + '/chat/completions', { method: 'POST', signal: ctl.signal, headers: { 'User-Agent': UA, authorization: 'Bearer ' + (apiKey || ''), 'content-type': 'application/json' }, body: JSON.stringify({ model, messages: [{ role: 'user', content: 'Reply with the single word: OK' }], max_tokens: 200 }) });
     const txt = await r.text(); if (!r.ok) throw Object.assign(new Error(`HTTP ${r.status}: ${txt.slice(0, 200)}`), { status: r.status });
     const j = JSON.parse(txt); const m = j.choices?.[0]?.message || {}; return (m.content || m.reasoning_content || m.reasoning || '').toString();
   } finally { clearTimeout(t); }

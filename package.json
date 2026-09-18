@@ -1,7 +1,7 @@
 {
   "name": "orca-agent",
   "productName": "ORCA Agent",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "ORCA — autonomous multi-model AI agent for your desktop. Open source by Nethyric.",
   "main": "src/main.js",
   "author": "Nethyric",
@@ -15,7 +15,9 @@
     "vault:keygen": "node scripts/vault.js keygen --write",
     "vault:seal": "node scripts/vault.js seal remote/vault.json",
     "vault:check": "node scripts/vault.js check",
-    "test": "node test/stream.test.js && node test/judge.test.js"
+    "test": "node test/stream.test.js && node test/judge.test.js",
+    "dist:mac": "node scripts/bake.js && electron-builder --mac --x64 --arm64 && node scripts/finish-unix.js mac",
+    "dist:linux": "node scripts/bake.js && electron-builder --linux --x64 && node scripts/finish-unix.js linux"
   },
   "devDependencies": {
     "electron": "33.4.11",
@@ -25,7 +27,7 @@
   "build": {
     "appId": "ai.orca.agent",
     "productName": "ORCA Agent",
-    "artifactName": "ORCA-Agent-${version}-win-${arch}.${ext}",
+    "artifactName": "ORCA-Agent-${version}-${os}-${arch}.${ext}",
     "directories": {
       "output": "release"
     },
@@ -53,23 +55,24 @@
         }
       ],
       "icon": "assets/icon.ico",
-      "signAndEditExecutable": false
+      "signAndEditExecutable": false,
+      "artifactName": "ORCA-Agent-${version}-win-${arch}.${ext}"
     },
     "portable": {
       "artifactName": "ORCA-Agent-${version}-portable.exe"
     },
     "extraResources": [
       {
-        "from": "bin/ffmpeg.exe",
-        "to": "bin/ffmpeg.exe"
-      },
-      {
-        "from": "bin/yt-dlp.exe",
-        "to": "bin/yt-dlp.exe"
-      },
-      {
         "from": "assets/tessdata",
         "to": "tessdata"
+      },
+      {
+        "from": "bin/",
+        "to": "bin/",
+        "filter": [
+          "ffmpeg*",
+          "yt-dlp*"
+        ]
       }
     ],
     "asarUnpack": [
@@ -89,7 +92,75 @@
       "node_modules/tesseract.js/node_modules/**",
       "**/tesseract.js-core/**",
       "**/*.wasm"
-    ]
+    ],
+    "mac": {
+      "target": [
+        {
+          "target": "zip",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "icon": "assets/icon.png",
+      "category": "public.app-category.developer-tools",
+      "identity": null,
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false,
+      "darkModeSupport": true,
+      "artifactName": "ORCA-Agent-${version}-mac-${arch}.${ext}"
+    },
+    "dmg": {
+      "artifactName": "ORCA-Agent-${version}-mac-${arch}.dmg",
+      "contents": [
+        {
+          "x": 140,
+          "y": 180
+        },
+        {
+          "x": 420,
+          "y": 180,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ]
+    },
+    "linux": {
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "tar.gz",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "assets/icon.png",
+      "category": "Development",
+      "synopsis": "Autonomous multi-model AI agent",
+      "artifactName": "ORCA-Agent-${version}-linux-${arch}.${ext}",
+      "executableName": "orca-agent",
+      "desktop": {
+        "entry": {
+          "Name": "ORCA Agent",
+          "Comment": "Autonomous multi-model AI agent",
+          "Categories": "Development;Utility;"
+        }
+      }
+    }
   },
   "dependencies": {
     "docx": "^9.7.1",

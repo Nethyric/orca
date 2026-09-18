@@ -19,7 +19,16 @@ ORCA یک ایجنت دسکتاپ است: کار را توضیح می‌دهید
 
 ## نصب
 
-**ویندوز (پرتابل)** — آخرین زیپ را از [Releases](https://github.com/Nethyric/orca/releases/latest) بگیرید، باز کنید و `ORCA.exe` را اجرا کنید. بدون نصب، بدون دسترسی مدیر.
+نسخهٔ سیستم خودتان را از [Releases](https://github.com/Nethyric/orca/releases/latest) بگیرید:
+
+| سیستم | فایل | اجرا |
+|---|---|---|
+| ویندوز ۱۰/۱۱ (x64) | `ORCA-Agent-<version>-win-x64.zip` | باز کنید و `ORCA.exe` را اجرا کنید (پرتابل، بدون نصب) |
+| مک (Apple Silicon) | `ORCA-Agent-<version>-mac-arm64.dmg` | به Applications بکشید؛ بار اول: راست‌کلیک → Open |
+| مک (Intel) | `ORCA-Agent-<version>-mac-x64.dmg` | همان |
+| لینوکس (x64) | `ORCA-Agent-<version>-linux-x64.AppImage` یا `.tar.gz` | `chmod +x` و اجرا |
+
+فایل `SHA256SUMS` کنار هر نسخه هست. برنامه خودش نسخهٔ جدید را پیدا می‌کند (تنظیمات → به‌روزرسانی).
 
 **از سورس** (ویندوز، مک، لینوکس):
 

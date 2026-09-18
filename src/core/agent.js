@@ -4,6 +4,7 @@
 const os = require('os');
 const config = require('./config');
 const remote = require('./remote');
+const UA = `ORCA/${remote.VERSION} (${process.platform}; ${process.arch}; +https://github.com/${remote.REPO})`; // some gateways sit behind edge filters that reject bare clients
 const vault = require('./vault');
 config.setVaultProbe(() => vault.enabled());
 
@@ -423,10 +424,10 @@ async function streamOnce(cfg, messages, onDelta, signal, useTools, temperature,
   if ((cfg.api || apiKind(cfg.baseUrl)) === 'anthropic') return await anthropicOnce(cfg, messages, onDelta, ctl, kick, useTools, temperature);
   const r = await fetch(cfg.baseUrl + '/chat/completions', {
     method: 'POST', signal: ctl.signal,
-    headers: { ...authHeadersFor(cfg), 'content-type': 'application/json', 'HTTP-Referer': 'https://github.com/' + remote.REPO, 'X-Title': 'ORCA', ...(cfg.extraHeaders || {}) },
+    headers: { ...authHeadersFor(cfg), 'content-type': 'application/json', 'HTTP-Referer': 'https://github.com/' + remote.REPO, 'X-Title': 'ORCA', 'User-Agent': UA, ...(cfg.extraHeaders || {}) },
     body: JSON.stringify(body),
   });
-  if (!r.ok) { const t = await r.text().catch(() => ''); const e = new Error(`HTTP ${r.status}: ${t.slice(0, 300)}`); e.status = r.status; throw e; }
+  if (!r.ok) { const t = await r.text().catch(() => ''); const e = new Error(`HTTP ${r.status}: ${t.slice(0, 300)}`); e.status = r.status; e.retryAfter = +r.headers.get('retry-after') || 0; e.rateDay = r.headers.get('x-ratelimit-remaining-day'); throw e; }
   kick(120000);
   const ct = r.headers.get('content-type') || '';
   if (!ct.includes('text/event-stream')) { // provider ignored stream=true
@@ -548,8 +549,10 @@ async function streamOnce(cfg, messages, onDelta, signal, useTools, temperature,
   // the provider dropped the stream a few characters into a tool call (not a token limit, nothing to salvage) → treat as a stall so the key/model rotation retries instead of feeding the model a misleading "arguments cut off" error
   if (tcs.length && !finish && !sawDone && !oversized && tcs.reduce((a, c) => a + (c.function.arguments || '').length, 0) < 1500 && tcs.some((c) => { try { JSON.parse(c.function.arguments || '{}'); return false; } catch (_) { return true; } })) { const e = new Error('provider cut the stream inside a tool call'); e.status = 504; throw e; }
   if ((finish === 'stop' || !finish) && !tcs.length && suspiciousStop(sr.content, Date.now() - startedAt)) finish = 'cut'; // proxy time limit reported as a normal stop / [DONE] without finish_reason
+  if (process.env.ORCA_DEBUG) console.error(`[stream] ${cfg.model} @${(cfg.baseUrl || '').replace(/^https?:\/\//, '').split('/')[0]} ${Date.now() - startedAt} ms finish=${finish || '-'} content=${sr.content.length} reasoning=${sr.reasoning.length} tools=${tcs.map((c) => c.function.name).join(',') || '-'} usage=${usage ? usage.completion_tokens : '?'}`);
   return { content: sr.content, reasoning: sr.reasoning, tool_calls: tcs, usage: usage || estimateUsage(messages, content, reasoning, [...calls.values()].map((c) => c.function.arguments || '').join('')), finish };
   } catch (e) {
+    if (process.env.ORCA_DEBUG) console.error(`[stream] ${cfg.model} @${(cfg.baseUrl || '').replace(/^https?:\/\//, '').split('/')[0]} ${Date.now() - startedAt} ms ERROR ${e.status || ''} ${String(e.message).slice(0, 160)} slow=${slow} stalled=${stalled} looped=${looped} content=${content.length} reasoning=${reasoning.length}`);
     if (slow && !(signal && signal.aborted)) {
       // re-issue once; if the second attempt is rejected (429/5xx), the caller's normal key/model rotation takes over
       onDelta({ type: 'reset' });
@@ -640,7 +643,7 @@ async function callModelOnce(modelKey, messages, { emit, signal, useTools = true
           const why = e.status === 429 ? 'busy' : e.status === 504 ? 'no response' : e.status >= 500 ? 'provider error ' + e.status : e.status === 401 || e.status === 403 ? 'key rejected' : e.status === 402 ? 'out of credit' : String(e.message || '').replace(/^HTTP \d+:\s*/, '').slice(0, 80);
           if (lastWhy !== cfg.label + why) { lastWhy = cfg.label + why; emit('status', { text: L().retry(`${cfg.label}: ${why}`), kind: 'retry' }); }
           if (e.status === 429 || e.status === 503 || e.status === 502 || e.status === 504 || e.status === 500 || /fetch failed|ECONN|ETIMEDOUT|stalled/i.test(e.message || '')) transient = true;
-          if (cfg.upstream && (e.status === 401 || e.status === 402 || e.status === 403 || e.status === 429 || e.status >= 500)) { vault.markBad(cfg.upstream, e.status); moveOn = true; break; } // next key
+          if (cfg.upstream && (e.status === 401 || e.status === 402 || e.status === 403 || e.status === 429 || e.status >= 500)) { vault.markBad(cfg.upstream, e.status, e); moveOn = true; break; } // next key
           if (e.status && !RETRYABLE.has(e.status)) { u = ups.length; break; } // hard error → next model
           if (e.status === 504 && a >= 1) break; // stalled twice → move on
           await sleep(Math.min(600 * Math.pow(2, a), 2500));
@@ -775,7 +778,9 @@ async function runAgent(o) {
 
       // Keep reasoning in the transcript sent back to the model (interleaved-thinking models like
       // MiniMax lose the thread otherwise), but the user only ever sees clean content.
-      const apiContent = (res.reasoning ? `<think>${res.reasoning}</think>\n` : '') + (res.content || '');
+      let apiContent = (res.reasoning ? `<think>${res.reasoning}</think>\n` : '') + (res.content || '');
+      // strict gateways reject an assistant turn with no visible text and no tool calls — keep the transcript valid
+      if (!apiContent.trim() && !res.tool_calls.length) apiContent = '…';
       const entry = { role: 'assistant', content: apiContent };
       if (res.tool_calls.length) {
         for (const tc of res.tool_calls) { try { JSON.parse(tc.function.arguments || '{}'); } catch (_) { const partial = String(tc.function.arguments || ''); tc._partial = partial; tc.function.arguments = JSON.stringify({ _truncated: true, path: (partial.match(/"path"\s*:\s*"([^"]+)"/) || [])[1] || undefined }); } }
@@ -1040,7 +1045,7 @@ async function anthropicOnce(cfg, messages, onDelta, ctl, kick, useTools, temper
   const body = { model: cfg.model, max_tokens: cfg.maxTokens || 4096, stream: true, messages: conv, ...(sys ? { system: sys } : {}), ...(temperature != null ? { temperature } : {}) };
   if (useTools) body.tools = tools.SCHEMAS.map((t) => ({ name: t.function.name, description: t.function.description, input_schema: t.function.parameters || { type: 'object', properties: {} } }));
   const r = await fetch(cfg.baseUrl + '/messages', { method: 'POST', signal: ctl.signal, headers: { ...authHeadersFor(cfg), 'content-type': 'application/json', ...(cfg.extraHeaders || {}) }, body: JSON.stringify(body) });
-  if (!r.ok) { const t = await r.text().catch(() => ''); const e = new Error(`HTTP ${r.status}: ${t.slice(0, 300)}`); e.status = r.status; throw e; }
+  if (!r.ok) { const t = await r.text().catch(() => ''); const e = new Error(`HTTP ${r.status}: ${t.slice(0, 300)}`); e.status = r.status; e.retryAfter = +r.headers.get('retry-after') || 0; e.rateDay = r.headers.get('x-ratelimit-remaining-day'); throw e; }
   kick(120000);
   const reader = r.body.getReader(); const dec = new TextDecoder();
   let buf = '', content = '', reasoning = '', usage = null, finish = '';

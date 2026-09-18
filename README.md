@@ -41,7 +41,16 @@ ORCA is a desktop agent that plans, writes code, runs it, reads the errors and f
 
 ## Installation
 
-**Windows (portable)** — download the latest zip from [Releases](https://github.com/Nethyric/orca/releases/latest), extract it, run `ORCA.exe`. No installer, no admin rights.
+Download the build for your system from [Releases](https://github.com/Nethyric/orca/releases/latest):
+
+| Platform | File | Run |
+|---|---|---|
+| Windows 10/11 x64 | `ORCA-Agent-<version>-win-x64.zip` | extract, run `ORCA.exe` (portable, no admin rights) |
+| macOS 12+ (Apple Silicon) | `ORCA-Agent-<version>-mac-arm64.dmg` / `.zip` | drag to Applications; first launch: right-click → Open |
+| macOS 12+ (Intel) | `ORCA-Agent-<version>-mac-x64.dmg` / `.zip` | same |
+| Linux x64 | `ORCA-Agent-<version>-linux-x64.AppImage` / `.tar.gz` | `chmod +x` and run |
+
+Builds are not code-signed; `SHA256SUMS` is attached to every release. The app checks for new releases itself (Settings → Updates).
 
 **From source** (Windows, macOS, Linux):
 
@@ -82,6 +91,8 @@ Anthropic-style and OpenAI-style APIs are both supported, as are local servers (
 ```bash
 npm run fetch-bins   # ffmpeg, yt-dlp, OCR data (not in git)
 npm run dist:win     # release/ORCA-Agent-<version>-win-x64.zip
+npm run dist:mac     # release/ORCA-Agent-<version>-mac-{x64,arm64}.{zip,dmg}   (on macOS)
+npm run dist:linux   # release/ORCA-Agent-<version>-linux-x64.{AppImage,tar.gz}
 ```
 
 Releases are built by GitHub Actions on every `v*` tag. Maintainers: see [docs/setup.md#maintainers](docs/setup.md#maintainers) for the release and key-rotation workflows.

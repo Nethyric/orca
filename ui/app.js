@@ -457,8 +457,8 @@ async function send(textOverride, regenerateFrom) {
   }
   if (S.attach.some((a) => a.uploading)) return toast(t('uploading'));
   // local slash commands
-  const sc = text.match(/^\/(plan|model|export|clear|files|new)\b\s*(.*)$/i);
-  if (sc && textOverride == null) { $('#input').value = ''; autosize(); const c = sc[1].toLowerCase(); if (c === 'plan') $('#plan-toggle').click(); else if (c === 'model') { const k = sc[2].trim().toLowerCase(); const m = S.cfg.models.find((x) => x.key === k || x.label.toLowerCase().includes(k)); if (m) { buildPicker($('#pick-single'), m.key, (v) => api('/api/config', { method: 'POST', body: { defaultModel: v } })); api('/api/config', { method: 'POST', body: { defaultModel: m.key } }); toast(m.label, 'ok'); } else toast(S.cfg.models.map((x) => x.key).join(', ')); } else if (c === 'export') { if (S.chat) { const r = await fetch('/api/chats/' + S.chat.id + '/export'); dl('orca-chat.md', await r.text()); } } else if (c === 'clear' || c === 'new') newChat(); else if (c === 'files') { openPanel(); showTab('files'); } return; }
+  const sc = text.match(/^\/(plan|model|export|clear|files|new|help)\b\s*(.*)$/i);
+  if (sc && textOverride == null) { $('#input').value = ''; autosize(); const c = sc[1].toLowerCase(); if (c === 'help') showHelp(sc[2].trim() === 'commands' ? 'cmds' : undefined); else if (c === 'plan') $('#plan-toggle').click(); else if (c === 'model') { const k = sc[2].trim().toLowerCase(); const m = S.cfg.models.find((x) => x.key === k || x.label.toLowerCase().includes(k)); if (m) { buildPicker($('#pick-single'), m.key, (v) => api('/api/config', { method: 'POST', body: { defaultModel: v } })); api('/api/config', { method: 'POST', body: { defaultModel: m.key } }); toast(m.label, 'ok'); } else toast(S.cfg.models.map((x) => x.key).join(', ')); } else if (c === 'export') { if (S.chat) { const r = await fetch('/api/chats/' + S.chat.id + '/export'); dl('orca-chat.md', await r.text()); } } else if (c === 'clear' || c === 'new') newChat(); else if (c === 'files') { openPanel(); showTab('files'); } return; }
   const files = S.attach.filter((a) => a.kind !== 'image').map((a) => a.name);
   const images = S.attach.filter((a) => a.kind === 'image' && a.path).map((a) => ({ path: a.path, url: a.url }));
   if (S.attach.length) {
@@ -516,13 +516,15 @@ function updBanner(d) {
   bar.classList.toggle('must', !!u.mustUpdate);
   const dlst = u.download || {};
   let mid = '';
-  if (dlst.ready) mid = `<b>${tu('ready')}</b><span class="sp"></span><button class="btn btn-primary" id="ub-apply">${tu('restart')}</button>`;
+  const isWin = !desktop || desktop.platform === 'win32';
+  if (dlst.ready) mid = `<b>${tu('ready')}</b><span class="sp"></span><button class="btn btn-primary" id="ub-apply">${isWin ? tu('restart') : tu('install')}</button>`;
   else if (dlst.active) mid = `<span>${tu('downloading')}</span><progress max="100" value="${dlst.pct || 0}"></progress><span class="mono small">${dlst.pct || 0}%</span><span class="sp"></span>`;
   else if (dlst.error) mid = `<b>${tu('error')}</b><span class="small">${esc(dlst.error)}</span><span class="sp"></span><a class="btn" href="${esc(u.url || '#')}" target="_blank" rel="noopener">${tu('manual')}</a><button class="btn" id="ub-later">${tu('later')}</button>`;
   else mid = `<b>${tu('available')(u.latest)}</b>${u.mustUpdate ? `<span>${tu('must')}</span>` : ''}<span class="sp"></span>${u.asset !== false ? `<button class="btn btn-primary" id="ub-dl">${tu('download')}</button>` : ''}<a class="btn" href="${esc(u.url || '#')}" target="_blank" rel="noopener">${tu('notes')}</a>${u.mustUpdate ? '' : `<button class="btn" id="ub-later">${tu('later')}</button>`}`;
-  bar.innerHTML = `${ico('download')}${mid}`;
+  bar.innerHTML = `<span class="upd-ico">${ico('update')}</span>${mid}<button class="ib sm upd-x" id="ub-x" data-tip="${esc(tu('later'))}">${ico('x')}</button>`;
+  if ($('#ub-x')) $('#ub-x').onclick = () => { bar.remove(); S.upd.dismissed = u.latest; if (!u.mustUpdate) api('/api/update/dismiss', { method: 'POST', body: { version: u.latest } }); };
   if ($('#ub-dl')) $('#ub-dl').onclick = () => { api('/api/update/download', { method: 'POST' }); updBanner({ download: { active: true, pct: 0 } }); };
-  if ($('#ub-apply')) $('#ub-apply').onclick = () => api('/api/update/apply', { method: 'POST' });
+  if ($('#ub-apply')) $('#ub-apply').onclick = async () => { const r = await api('/api/update/apply', { method: 'POST' }); if (r.error) toast(r.error, 'err'); else if (r.manual) toast(r.note || tu('manualNote'), 'ok'); };
   if ($('#ub-later')) $('#ub-later').onclick = () => { bar.remove(); S.upd.dismissed = u.latest; api('/api/update/dismiss', { method: 'POST', body: { version: u.latest } }); };
 }
 function handle(p) {
@@ -539,7 +541,7 @@ function handle(p) {
       scheduleRender(L); break;
     case 'thought_done': { L.reasoning = d.text; const th = $('.thought', L.el); th.classList.remove('hidden', 'live'); th.open = false; $('.th-body', th).textContent = d.text; break; }
     case 'tool_call': { L.steps[d.id] = addStep($('.steps', L.el), d); L.content = ''; $('.content', L.el).innerHTML = ''; const th = $('.thought', L.el); th.classList.remove('live'); th.open = false; addTimeline(d, L); S.stepCount++; if (nearBottom()) thread.scrollTop = 1e9; break; }
-    case 'tool_result': { if (L.steps[d.id]) finishStep(L.steps[d.id], d); markTimeline(d); if (!d.ok && /PLAN MODE/.test(d.result || '') && !S._planHint) { S._planHint = true; toast(({ fa: 'حالت نقشه فعال است: فقط برنامه ارائه می‌شود. برای ساختن، دکمهٔ «نقشه» را خاموش کنید یا «اجرا کن» بگویید.', ru: 'Режим плана включён: создаётся только план. Выключите «План» или скажите «выполни».', zh: '计划模式已开启：只生成计划。关闭“计划”或说“执行”。' })[lang] || 'Plan mode is on: only a plan is produced. Turn off “Plan” or say “execute”.'); } break; }
+    case 'tool_result': { if (L.steps[d.id]) finishStep(L.steps[d.id], d); markTimeline(d); maybeAutoPreview(d); if (!d.ok && /PLAN MODE/.test(d.result || '') && !S._planHint) { S._planHint = true; toast(({ fa: 'حالت نقشه فعال است: فقط برنامه ارائه می‌شود. برای ساختن، دکمهٔ «نقشه» را خاموش کنید یا «اجرا کن» بگویید.', ru: 'Режим плана включён: создаётся только план. Выключите «План» или скажите «выполни».', zh: '计划模式已开启：只生成计划。关闭“计划”或说“执行”。' })[lang] || 'Plan mode is on: only a plan is produced. Turn off “Plan” or say “execute”.'); } break; }
     case 'approval': showApproval(L, p.runId, d); break;
     case 'checkpoint': addChange(d); break;
     case 'question': showQuestion(L.el, d); break;
@@ -590,6 +592,7 @@ function showApproval(L, runId, d) {
 const openPanel = () => { $('#panel').classList.remove('collapsed'); $('#toggle-panel').classList.add('active'); localStorage.setItem('orca.panel', '1'); };
 const togglePanel = () => { const c = $('#panel').classList.toggle('collapsed'); $('#toggle-panel').classList.toggle('active', !c); localStorage.setItem('orca.panel', c ? '0' : '1'); };
 $('#toggle-panel').onclick = togglePanel;
+if ($('#open-help')) $('#open-help').onclick = () => showHelp();
 if (localStorage.getItem('orca.panel') === '1') openPanel();
 function showTab(name) { $$('.panel-tabs button').forEach((x) => x.classList.toggle('active', x.dataset.tab === name)); $$('.tab').forEach((x) => x.classList.toggle('active', x.id === 'tab-' + name)); if (name === 'files') loadFiles(); if (name === 'changes') { refreshChanges(); $('#chg-badge').classList.add('hidden'); } }
 $$('.panel-tabs button').forEach((b) => (b.onclick = () => showTab(b.dataset.tab)));
@@ -637,15 +640,59 @@ async function previewFile(p) {
   const r = await api('/api/workspace/file?path=' + encodeURIComponent(p));
   if (r.error) { body.textContent = r.error; return; }
   const acts = $('#preview-actions');
-  if (/\.html?$/i.test(p)) {
-    const f = el('iframe'); f.sandbox = 'allow-scripts allow-same-origin allow-forms allow-modals allow-popups'; f.src = wsUrl(p) + '?t=' + Date.now(); body.appendChild(f);
-    const b = el('button', 'ib sm', ico('edit')); b.dataset.tip = t('edit'); b.onclick = () => editFile(p, r.content);
-    const o = el('button', 'ib sm', ico('external')); o.dataset.tip = 'Open'; o.onclick = () => window.open(f.src, '_blank');
-    const rf = el('button', 'ib sm', ico('refresh')); rf.onclick = () => (f.src = wsUrl(p) + '?t=' + Date.now());
-    acts.append(rf, b, o); return;
-  }
+  if (/\.html?$/i.test(p)) { livePreview(p, r.content); return; }
   if (/\.md$/i.test(p)) { const d = el('div', 'md content'); d.innerHTML = md(r.content); d.dir = detectDir(r.content); body.appendChild(d); const b = el('button', 'ib sm', ico('edit')); b.onclick = () => editFile(p, r.content); acts.append(b); return; }
   editFile(p, r.content);
+}
+// ── Live site preview (runs the page inside the app; phone / tablet / desktop / full-window) ──
+const DEVICES = { phone: { w: 390, h: 844, ico: 'phone' }, tablet: { w: 820, h: 1180, ico: 'tablet' }, desktop: { w: 0, h: 0, ico: 'desktop' } };
+const PV = { device: localStorage.getItem('orca.pv.device') || 'desktop', full: false, path: '', src: '' };
+function livePreview(p, content) {
+  const body = $('#preview-body'); body.innerHTML = ''; const acts = $('#preview-actions'); acts.innerHTML = '';
+  PV.path = p; PV.src = wsUrl(p);
+  const stage = el('div', 'pv-stage'); const frameBox = el('div', 'pv-frame'); const f = el('iframe');
+  f.sandbox = 'allow-scripts allow-same-origin allow-forms allow-modals allow-popups'; f.src = PV.src + '?t=' + Date.now(); f.title = p;
+  const urlbar = el('div', 'pv-url'); urlbar.innerHTML = `<span class="dots"><i></i><i></i><i></i></span><span class="addr mono">${esc(p)}</span><span class="dim mono" id="pv-dim"></span>`;
+  frameBox.append(urlbar, f); stage.appendChild(frameBox); body.appendChild(stage);
+  const seg = el('div', 'seg pv-seg');
+  for (const [k, d] of Object.entries(DEVICES)) { const b = el('button', 'ib sm' + (PV.device === k ? ' on' : ''), ico(d.ico)); b.dataset.tip = ({ phone: { en: 'Phone', fa: 'موبایل', ru: 'Телефон', zh: '手机' }, tablet: { en: 'Tablet', fa: 'تبلت', ru: 'Планшет', zh: '平板' }, desktop: { en: 'Desktop', fa: 'کامپیوتر', ru: 'Компьютер', zh: '电脑' } })[k][lang] || k; b.onclick = () => { PV.device = k; localStorage.setItem('orca.pv.device', k); $$('.pv-seg .ib').forEach((x) => x.classList.remove('on')); b.classList.add('on'); applyDevice(); }; seg.appendChild(b); }
+  const rot = el('button', 'ib sm', ico('rotate')); rot.dataset.tip = ({ fa: 'چرخش', ru: 'Повернуть', zh: '旋转' })[lang] || 'Rotate'; rot.onclick = () => { PV.rot = !PV.rot; applyDevice(); };
+  const full = el('button', 'ib sm', ico('maximize')); full.dataset.tip = ({ fa: 'تمام‌صفحه (Esc)', ru: 'Во весь экран (Esc)', zh: '全屏 (Esc)' })[lang] || 'Full window (Esc)'; full.onclick = () => setPreviewFull(!PV.full);
+  const rf = el('button', 'ib sm', ico('refresh')); rf.dataset.tip = ({ fa: 'بارگذاری مجدد', ru: 'Обновить', zh: '刷新' })[lang] || 'Reload'; rf.onclick = () => (f.src = PV.src + '?t=' + Date.now());
+  const b = el('button', 'ib sm', ico('edit')); b.dataset.tip = t('edit'); b.onclick = () => { setPreviewFull(false); editFile(p, content); };
+  const o = el('button', 'ib sm', ico('external')); o.dataset.tip = ({ fa: 'باز کردن در مرورگر', ru: 'Открыть в браузере', zh: '在浏览器中打开' })[lang] || 'Open in browser'; o.onclick = () => (desktop ? desktop.openExternal(location.origin + PV.src) : window.open(PV.src, '_blank'));
+  acts.append(seg, rot, rf, full, b, o);
+  function applyDevice() {
+    const d = DEVICES[PV.device] || DEVICES.desktop; const dim = $('#pv-dim');
+    frameBox.classList.toggle('device', !!d.w);
+    if (d.w) { const w = PV.rot ? d.h : d.w, h = PV.rot ? d.w : d.h; frameBox.style.setProperty('--dw', w + 'px'); frameBox.style.setProperty('--dh', h + 'px'); dim.textContent = `${w}×${h}`; }
+    else { frameBox.style.removeProperty('--dw'); frameBox.style.removeProperty('--dh'); dim.textContent = ''; }
+    fitStage();
+  }
+  function fitStage() {
+    // scale the device frame down when the panel is narrower than the device — the page still renders at real device width
+    const d = DEVICES[PV.device] || DEVICES.desktop; if (!d.w) { frameBox.style.transform = ''; stage.style.height = ''; return; }
+    const w = (PV.rot ? d.h : d.w) + 24, h = (PV.rot ? d.w : d.h) + 60; const aw = stage.clientWidth - 8, ah = Math.max(240, stage.clientHeight - 8);
+    const k = Math.min(1, aw / w, ah / h); frameBox.style.transform = k < 1 ? `scale(${k})` : '';
+  }
+  PV._fit = fitStage; applyDevice();
+  if (!PV._ro && window.ResizeObserver) { PV._ro = new ResizeObserver(() => PV._fit && PV._fit()); PV._ro.observe(body); }
+}
+function setPreviewFull(on) {
+  PV.full = on; document.body.classList.toggle('pv-full', on);
+  if (on) openPanel();
+  setTimeout(() => PV._fit && PV._fit(), 60);
+}
+// After the agent writes or scaffolds a page, show it right away — no need to leave the app.
+let _autoPv = 0;
+function maybeAutoPreview(d) {
+  if (!d || !d.ok) return; let pth = '';
+  try {
+    if (d.name === 'scaffold_site') { const r = JSON.parse(d.result || '{}'); pth = (r.files || []).find((f) => /(^|\/)index\.html?$/i.test(f)) || (r.files || []).find((f) => /\.html?$/i.test(f)) || ''; }
+    else if (d.name === 'write_file') { const r = JSON.parse(d.result || '{}'); if (/(^|\/)index\.html?$/i.test(r.path || '')) pth = r.path; }
+  } catch (_) {}
+  if (!pth || Date.now() - _autoPv < 4000) return; _autoPv = Date.now();
+  openPanel(); previewFile(pth);
 }
 function previewText(name, content, langName) { $('#preview-name').textContent = name; $('#preview-actions').innerHTML = ''; const body = $('#preview-body'); body.innerHTML = ''; if (/^html?$/.test(langName)) { const f = el('iframe'); f.sandbox = 'allow-scripts'; f.srcdoc = content; body.appendChild(f); return; } const ta = el('textarea'); ta.value = content; ta.readOnly = true; body.appendChild(ta); $('#preview-save').classList.add('hidden'); }
 function editFile(p, content) { const body = $('#preview-body'); body.innerHTML = ''; const ta = el('textarea'); ta.value = content; ta.spellcheck = false; body.appendChild(ta); const sv = $('#preview-save'); sv.classList.remove('hidden'); sv.onclick = async () => { await api('/api/workspace/file', { method: 'POST', body: { path: p, content: ta.value } }); toast(t('saved'), 'ok'); }; ta.onkeydown = (e) => { if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); sv.click(); } if (e.key === 'Tab') { e.preventDefault(); const s = ta.selectionStart; ta.setRangeText('  ', s, ta.selectionEnd, 'end'); } }; }
@@ -701,7 +748,8 @@ async function providerEditor(existingId) {
   const opt = (p) => `<option value="${esc(p.id)}" ${p.id === cur.id ? 'selected' : ''}>${esc(p.name)}${p.count ? ` (${p.count})` : ''}</option>`;
   box.innerHTML = `
     <div class="pe-head"><b>${existingId ? ts('editProvider') : ts('addProvider')}</b><button class="ib sm" id="pe-close">${ico('x')}</button></div>
-    <div class="form-row"><label>${ts('provider')}</label><select class="text" id="pe-id" ${existingId ? 'disabled' : ''}><optgroup label="${ts('popular')}">${featured.map(opt).join('')}</optgroup><optgroup label="${ts('allProviders')}">${others.map(opt).join('')}</optgroup></select></div>
+    <div class="form-row"><label>${ts('provider')}</label><select class="text" id="pe-id" ${existingId ? 'disabled' : ''}><optgroup label="${ts('popular')}">${featured.map(opt).join('')}</optgroup><optgroup label="${ts('allProviders')}">${others.map(opt).join('')}</optgroup><optgroup label="${ts('judge')}"><option value="__judge" ${cur.id === '__judge' ? 'selected' : ''}>${esc(ts('judge'))} — System One (TypeSafe)</option></optgroup></select></div>
+    <div class="desc hidden" id="pe-judge-note"></div>
     <div class="form-row"><label>${ts('displayName')}</label><input class="text" id="pe-name" value="${esc(cur.name || '')}" placeholder="—"></div>
     <div class="form-row"><label>Base URL</label><input class="text mono" id="pe-url" value="${esc(cur.baseUrl || '')}" placeholder="https://api.example.com/v1" spellcheck="false"></div>
     <div class="form-row"><label>${ts('apiKey')}</label><input class="text mono" id="pe-key" type="password" placeholder="${cur.keySet ? cur.apiKey : ts('pasteKey')}" spellcheck="false" autocomplete="off"><button class="ib sm" id="pe-eye" data-tip="${ts('show')}">${ico('eye')}</button><a class="small" id="pe-doc" target="_blank" rel="noopener" href="#">${ts('getKey')}</a></div>
@@ -721,15 +769,27 @@ async function providerEditor(existingId) {
     $('#pe-manual-add').onclick = () => { const id = $('#pe-manual').value.trim(); if (!id) return; chosen.set(id, { id, name: id, maxTokens: 8192, toolCall: true }); renderModels(); };
   };
   const loadCatalogModels = async () => { const p = provInfo(); if (!p.id) return; const r = await api('/api/providers/models?id=' + encodeURIComponent(p.id)); known = r.models || []; renderModels(); };
-  const applyProvider = async () => { const p = provInfo(); if (!existingId) { $('#pe-name').value = p.name || ''; $('#pe-url').value = p.api || ''; } $('#pe-url').placeholder = p.api || 'https://api.example.com/v1'; $('#pe-doc').href = ({ openai: 'https://platform.openai.com/api-keys', anthropic: 'https://console.anthropic.com/settings/keys', google: 'https://aistudio.google.com/apikey', openrouter: 'https://openrouter.ai/keys', groq: 'https://console.groq.com/keys', xai: 'https://console.x.ai', mistral: 'https://console.mistral.ai/api-keys', deepseek: 'https://platform.deepseek.com/api_keys', togetherai: 'https://api.together.ai/settings/api-keys', cerebras: 'https://cloud.cerebras.ai', zhipuai: 'https://open.bigmodel.cn/usercenter/apikeys', moonshotai: 'https://platform.moonshot.ai/console/api-keys', huggingface: 'https://huggingface.co/settings/tokens', nvidia: 'https://build.nvidia.com', 'fireworks-ai': 'https://fireworks.ai/account/api-keys', dahl: 'https://inference.dahl.global/account' })[p.id] || (p.doc || '#'); $('#pe-doc').classList.toggle('hidden', $('#pe-doc').getAttribute('href') === '#'); $('#pe-key').placeholder = p.local ? ts('noKeyNeeded') : (cur.keySet ? cur.apiKey : ts('pasteKey')); await loadCatalogModels(); };
+  const judgeMode = () => $('#pe-id').value === '__judge';
+  const applyJudgeMode = () => {
+    const on = judgeMode(); const note = $('#pe-judge-note'); note.classList.toggle('hidden', !on);
+    box.classList.toggle('pe-judge', on);
+    if (!on) return;
+    const J = S.cfg.judge || {};
+    note.innerHTML = `${ts('judgeDesc')}<br><span class="small">${esc(({ en: 'Not a chat model: it is asked typed questions (yes/no, choice, score) and never writes answers. Only the key is needed — URL and model have safe defaults.', fa: 'مدل گفتگو نیست: از آن سوال‌های تایپ‌شده (بله/خیر، انتخاب، امتیاز) پرسیده می‌شود و هیچ‌وقت پاسخ نمی‌نویسد. فقط کلید لازم است — URL و مدل پیش‌فرض امن دارند.', ru: 'Это не чат-модель: ей задают типизированные вопросы (да/нет, выбор, оценка), ответы она не пишет. Нужен только ключ — URL и модель имеют безопасные значения по умолчанию.', zh: '不是聊天模型：只回答类型化问题（是/否、选择、评分），从不撰写回复。只需密钥 — URL 和模型有安全默认值。' })[lang] || '')}</span>`;
+    $('#pe-name').value = ts('judge'); $('#pe-url').value = J.baseUrl || 'https://api.typesafe.ai/v1'; $('#pe-url').placeholder = 'https://api.typesafe.ai/v1';
+    $('#pe-key').placeholder = J.keySet ? J.apiKey : ts('pasteKey'); $('#pe-doc').href = 'https://typesafe.ai'; $('#pe-doc').classList.remove('hidden');
+    $('#pe-filter').value = ''; known = [{ id: J.model || 'jev-latest', name: 'jev-latest', context: 64000, judge: true }]; chosen = new Map([[known[0].id, known[0]]]); renderModels();
+    $('#pe-msg').textContent = J.keySet ? (S.health?.judge?.enabled ? '● ' + ts('judgeTested') : '') : '';
+  };
+  const applyProvider = async () => { if (judgeMode()) return applyJudgeMode(); box.classList.remove('pe-judge'); $('#pe-judge-note').classList.add('hidden'); const p = provInfo(); if (!existingId) { $('#pe-name').value = p.name || ''; $('#pe-url').value = p.api || ''; } $('#pe-url').placeholder = p.api || 'https://api.example.com/v1'; $('#pe-doc').href = ({ openai: 'https://platform.openai.com/api-keys', anthropic: 'https://console.anthropic.com/settings/keys', google: 'https://aistudio.google.com/apikey', openrouter: 'https://openrouter.ai/keys', groq: 'https://console.groq.com/keys', xai: 'https://console.x.ai', mistral: 'https://console.mistral.ai/api-keys', deepseek: 'https://platform.deepseek.com/api_keys', togetherai: 'https://api.together.ai/settings/api-keys', cerebras: 'https://cloud.cerebras.ai', zhipuai: 'https://open.bigmodel.cn/usercenter/apikeys', moonshotai: 'https://platform.moonshot.ai/console/api-keys', huggingface: 'https://huggingface.co/settings/tokens', nvidia: 'https://build.nvidia.com', 'fireworks-ai': 'https://fireworks.ai/account/api-keys', dahl: 'https://inference.dahl.global/account', routeway: 'https://routeway.ai/keys' })[p.id] || (p.doc || '#'); $('#pe-doc').classList.toggle('hidden', $('#pe-doc').getAttribute('href') === '#'); $('#pe-key').placeholder = p.local ? ts('noKeyNeeded') : (cur.keySet ? cur.apiKey : ts('pasteKey')); await loadCatalogModels(); };
   $('#pe-id').onchange = applyProvider;
   $('#pe-filter').oninput = renderModels;
   $('#pe-eye').onclick = () => { const k = $('#pe-key'); k.type = k.type === 'password' ? 'text' : 'password'; };
   $('#pe-close').onclick = () => box.classList.add('hidden');
   const creds = () => ({ baseUrl: $('#pe-url').value.trim(), apiKey: $('#pe-key').value.trim(), api: provInfo().anthropic || /anthropic\.com/.test($('#pe-url').value) ? 'anthropic' : 'openai' });
   $('#pe-discover').onclick = async () => { const b = $('#pe-discover'); b.disabled = true; $('#pe-msg').textContent = ts('discovering'); const body = creds(); if (!body.apiKey && cur.keySet) body.useStored = existingId; const r = await api('/api/providers/discover', { method: 'POST', body: { ...body, id: existingId || '' } }); b.disabled = false; if (r.error) { $('#pe-msg').textContent = '✗ ' + r.error.slice(0, 120); return; } const live = r.models || []; const byId = new Map(known.map((m) => [m.id, m])); known = live.map((m) => ({ ...(byId.get(m.id) || {}), ...m, toolCall: byId.get(m.id)?.toolCall ?? true })); $('#pe-msg').textContent = `✓ ${live.length} ${ts('modelsN')}`; renderModels(); };
-  $('#pe-test').onclick = async () => { const m = [...chosen.keys()][0]; if (!m) return ($('#pe-msg').textContent = ts('pickModelFirst')); $('#pe-msg').textContent = ts('testing'); const body = { ...creds(), model: m }; if (!body.apiKey && existingId) body.key = `${existingId}/${m}`; const r = await api('/api/models/test', { method: 'POST', body }); $('#pe-msg').textContent = r.ok ? `✓ ${m} · ${r.ms} ms` : `✗ ${(r.error || '').slice(0, 140)}`; };
-  $('#pe-save').onclick = async () => { const id = existingId || $('#pe-id').value; if (!id) return; const pv = { name: $('#pe-name').value.trim() || provInfo().name || id, baseUrl: $('#pe-url').value.trim() || provInfo().api || '', models: [...chosen.values()] }; const k = $('#pe-key').value.trim(); if (k) pv.apiKey = k; if (!pv.baseUrl) return ($('#pe-msg').textContent = ts('needUrl')); if (!pv.models.length) return ($('#pe-msg').textContent = ts('pickModelFirst')); await api('/api/config', { method: 'POST', body: { providers: { [id]: pv } } }); await loadConfig(); toast(ts('saved'), 'ok'); openSettings('models'); };
+  $('#pe-test').onclick = async () => { if (judgeMode()) { $('#pe-msg').textContent = ts('testing'); const body = { baseUrl: $('#pe-url').value.trim(), model: [...chosen.keys()][0] || 'jev-latest' }; if ($('#pe-key').value.trim()) body.apiKey = $('#pe-key').value.trim(); const r = await api('/api/judge/test', { method: 'POST', body }); $('#pe-msg').textContent = r.ok ? `✓ ${ts('judgeTested')} · ${r.ms} ms · ${r.model || ''}` : `✗ ${(r.error || '').slice(0, 140)}`; return; } const m = [...chosen.keys()][0]; if (!m) return ($('#pe-msg').textContent = ts('pickModelFirst')); $('#pe-msg').textContent = ts('testing'); const body = { ...creds(), model: m }; if (!body.apiKey && existingId) body.key = `${existingId}/${m}`; const r = await api('/api/models/test', { method: 'POST', body }); $('#pe-msg').textContent = r.ok ? `✓ ${m} · ${r.ms} ms` : `✗ ${(r.error || '').slice(0, 140)}`; };
+  $('#pe-save').onclick = async () => { if (judgeMode()) { const judge = { enabled: true, baseUrl: $('#pe-url').value.trim() || 'https://api.typesafe.ai/v1', model: [...chosen.keys()][0] || 'jev-latest' }; const k = $('#pe-key').value.trim(); if (k) judge.apiKey = k; if (!k && !(S.cfg.judge || {}).keySet) return ($('#pe-msg').textContent = ts('pasteKey')); await api('/api/config', { method: 'POST', body: { judge } }); toast(t('saved'), 'ok'); S.cfg = await api('/api/config'); api('/api/health').then((h) => { S.health = h; }).catch(() => {}); box.classList.add('hidden'); openSettings('agent'); return; } const id = existingId || $('#pe-id').value; if (!id) return; const pv = { name: $('#pe-name').value.trim() || provInfo().name || id, baseUrl: $('#pe-url').value.trim() || provInfo().api || '', models: [...chosen.values()] }; const k = $('#pe-key').value.trim(); if (k) pv.apiKey = k; if (!pv.baseUrl) return ($('#pe-msg').textContent = ts('needUrl')); if (!pv.models.length) return ($('#pe-msg').textContent = ts('pickModelFirst')); await api('/api/config', { method: 'POST', body: { providers: { [id]: pv } } }); await loadConfig(); toast(ts('saved'), 'ok'); openSettings('models'); };
   await applyProvider();
   if (existingId) { $('#pe-name').value = cur.name || ''; $('#pe-url').value = cur.baseUrl || ''; renderModels(); }
 }
@@ -845,7 +905,7 @@ async function openSettings(page = 'general') {
   api('/api/update').then(paintUpd).catch(() => {});
   if ($('#upd-check')) $('#upd-check').onclick = async () => { $('#upd-msg').textContent = tu('checking'); paintUpd(await api('/api/update?force=1')); };
   if ($('#upd-dl')) $('#upd-dl').onclick = async () => { $('#upd-msg').textContent = tu('downloading'); await api('/api/update/download', { method: 'POST' }); };
-  if ($('#upd-apply')) $('#upd-apply').onclick = async () => { const r = await api('/api/update/apply', { method: 'POST' }); if (r.error) toast(r.error, 'err'); else if (r.manual) window.open(S.upd?.url || 'https://github.com/' + (S.cfg.app?.repo || '') + '/releases/latest', '_blank'); };
+  if ($('#upd-apply')) $('#upd-apply').onclick = async () => { const r = await api('/api/update/apply', { method: 'POST' }); if (r.error) toast(r.error, 'err'); else if (r.manual) toast(r.note || tu('manualNote'), 'ok'); };
   if ($('#st-autoupd')) swClick('st-autoupd', (on) => api('/api/config', { method: 'POST', body: { autoUpdate: on } }));
   // general
   segClick('st-lang', async (v) => { await setLang(v); openSettings('general'); });
@@ -911,11 +971,52 @@ function cmdActions() {
     { ico: 'compare', label: t('modeSide'), run: () => $('[data-mode="side"]').click() },
     { ico: 'swords', label: t('modeBattle'), run: () => $('[data-mode="battle"]').click() },
     { ico: 'download', label: ts('exportChat'), run: async () => { if (!S.chat) return; const r = await fetch('/api/chats/' + S.chat.id + '/export'); dl('orca-chat.md', await r.text()); } },
+    { ico: 'question', label: t('help'), sub: 'F1', run: () => showHelp() },
     { ico: 'keyboard', label: t('shortcuts'), sub: 'Ctrl /', run: showShortcuts },
     { ico: 'brain', label: '/init — ORCA.md', run: () => { $('#input').value = '/init'; send(); } },
     { ico: 'refresh', label: '/compact', run: () => { $('#input').value = '/compact'; send(); } },
     { ico: 'download', label: ({ fa: 'دانلود از اینستاگرام/تیک‌تاک/X', ru: 'Скачать из Instagram/TikTok/X', zh: '从 Instagram/TikTok/X 下载' })[lang] || 'Download from Instagram/TikTok/X', run: () => { $('#input').value = ({ fa: 'این لینک رو دانلود کن: ', ru: 'Скачай эту ссылку: ', zh: '下载这个链接：' })[lang] || 'Download this link: '; $('#input').focus(); } },
   ];
+}
+function showHelp(section) {
+  const L = lang; const T = (o) => o[L] || o.en;
+  const slash = Object.entries(SLASH_D).map(([k, d]) => `<div><kbd>/${k}</kbd><span>${esc(d[L] || d.en)}</span></div>`).join('');
+  const modes = [
+    ['chat', { en: 'Chat — one model answers; the agent may read files, search the web and run tools when it helps.', fa: 'گفتگو — یک مدل پاسخ می‌دهد؛ در صورت نیاز فایل می‌خواند، وب را جست‌وجو می‌کند و ابزار اجرا می‌کند.', ru: 'Чат — отвечает одна модель; при необходимости читает файлы, ищет в вебе и запускает инструменты.', zh: '聊天 — 一个模型回答；需要时读取文件、搜索网络并运行工具。' }],
+    ['compare', { en: 'Compare — two models answer side by side; pick the winner and the leaderboard learns your taste.', fa: 'مقایسه — دو مدل هم‌زمان پاسخ می‌دهند؛ برنده را انتخاب کنید تا رتبه‌بندی سلیقهٔ شما را یاد بگیرد.', ru: 'Сравнение — две модели отвечают рядом; выберите победителя, и рейтинг подстроится под вас.', zh: '对比 — 两个模型并排回答；选出优胜者，排行榜会学习你的偏好。' }],
+    ['plan', { en: 'Plan — the agent only plans (no files are touched) until you say “execute”.', fa: 'نقشه — فقط برنامه می‌دهد و به فایل‌ها دست نمی‌زند تا بگویید «اجرا کن».', ru: 'План — агент только планирует, ничего не меняя, пока вы не скажете «выполни».', zh: '计划 — 只做计划、不动文件，直到你说“执行”。' }],
+    ['web', { en: 'Web — research mode: multi-source search, page reading and citations. Turns itself on for questions that need live information.', fa: 'وب — حالت پژوهش: جست‌وجوی چندمنبعی، خواندن صفحه‌ها و ارجاع. برای سوال‌هایی که اطلاعات زنده می‌خواهند خودکار روشن می‌شود.', ru: 'Веб — режим исследования: поиск по нескольким источникам, чтение страниц, ссылки. Включается сам для вопросов о текущих событиях.', zh: '网页 — 研究模式：多源搜索、读取页面并给出引用。需要实时信息的问题会自动开启。' }],
+  ].map(([k, d]) => `<li><b>${k}</b> ${esc(T(d))}</li>`).join('');
+  const auton = T({
+    en: '<b>Autonomy</b> (toolbar): <i>Ask</i> confirms every risky action · <i>Auto</i> runs safe steps and asks before deleting, installing, or spending money · <i>Full</i> never asks. The decision engine (Settings → Agent) adds a calibrated second opinion on risk and routing when enabled.',
+    fa: '<b>خودمختاری</b> (نوار بالا): <i>Ask</i> برای هر کار پرریسک اجازه می‌گیرد · <i>Auto</i> کارهای امن را خودش انجام می‌دهد و پیش از حذف، نصب یا هزینه می‌پرسد · <i>Full</i> هیچ‌وقت نمی‌پرسد. موتور تصمیم (تنظیمات → عامل) در صورت فعال‌بودن، نظر دومِ کالیبره‌شده دربارهٔ ریسک و مسیریابی می‌دهد.',
+    ru: '<b>Автономность</b> (панель): <i>Ask</i> подтверждает каждое рискованное действие · <i>Auto</i> выполняет безопасные шаги и спрашивает перед удалением, установкой или тратами · <i>Full</i> не спрашивает никогда. Движок решений (Настройки → Агент) добавляет калиброванное второе мнение о риске и маршрутизации.',
+    zh: '<b>自主级别</b>（工具栏）：<i>Ask</i> 每个高风险操作都确认 · <i>Auto</i> 自动执行安全步骤，删除、安装或花钱前询问 · <i>Full</i> 从不询问。决策引擎（设置 → 代理）开启后会对风险和路由提供校准的第二意见。',
+  });
+  const sites = T({
+    en: '<b>Building sites & apps</b>: describe what you want (“a landing page for a café with menu and booking form”). The agent scaffolds the project, writes the files and opens a <b>live preview</b> in the right panel — switch between phone, tablet, desktop and full-window, rotate, reload, or open it in your browser. Every file change is a checkpoint you can restore from the Changes tab.',
+    fa: '<b>ساخت سایت و اپ</b>: بگویید چه می‌خواهید («لندینگ کافه با منو و فرم رزرو»). عامل پروژه را می‌سازد، فایل‌ها را می‌نویسد و <b>پیش‌نمایش زنده</b> را در پنل راست باز می‌کند — بین موبایل، تبلت، کامپیوتر و تمام‌صفحه جابه‌جا شوید، بچرخانید، رفرش کنید یا در مرورگر باز کنید. هر تغییر فایل یک نقطهٔ بازگشت است (تب تغییرات).',
+    ru: '<b>Сайты и приложения</b>: опишите, что нужно («лендинг кафе с меню и формой брони»). Агент создаст проект, напишет файлы и откроет <b>живой предпросмотр</b> в правой панели — телефон, планшет, компьютер, во весь экран, поворот, обновление или открытие в браузере. Каждое изменение файла — контрольная точка во вкладке «Изменения».',
+    zh: '<b>构建网站与应用</b>：描述需求（“带菜单和预订表单的咖啡馆落地页”）。代理会搭建项目、写入文件，并在右侧面板打开<b>实时预览</b> — 可切换手机/平板/电脑/全屏、旋转、刷新或在浏览器中打开。每次文件改动都是可从“更改”标签恢复的检查点。',
+  });
+  const models = T({
+    en: '<b>Models</b>: built-in models work out of the box and rotate automatically when one is busy. Add your own provider in Settings → Models (any OpenAI-compatible or Anthropic endpoint; the catalog knows 200+ providers) — your keys stay on this machine.',
+    fa: '<b>مدل‌ها</b>: مدل‌های داخلی بدون تنظیم کار می‌کنند و وقتی یکی شلوغ است خودکار جابه‌جا می‌شوند. ارائه‌دهندهٔ خودتان را در تنظیمات → مدل‌ها اضافه کنید (هر endpoint سازگار با OpenAI یا Anthropic؛ کاتالوگ ۲۰۰+ ارائه‌دهنده را می‌شناسد) — کلیدها فقط روی همین دستگاه می‌مانند.',
+    ru: '<b>Модели</b>: встроенные модели работают сразу и переключаются, когда одна занята. Свой провайдер — в Настройки → Модели (любой OpenAI-совместимый или Anthropic endpoint; каталог знает 200+ провайдеров) — ключи остаются на этом компьютере.',
+    zh: '<b>模型</b>：内置模型开箱即用，繁忙时自动轮换。在 设置 → 模型 添加自己的提供商（任何 OpenAI 兼容或 Anthropic 端点；目录收录 200+ 提供商）— 密钥只保存在本机。',
+  });
+  const upd = T({ en: '<b>Updates</b>: the app checks GitHub releases on start and shows a banner when a new version exists. On Windows it downloads, verifies the SHA-256 and swaps itself in place; on macOS and Linux it downloads the package and opens the folder for you.', fa: '<b>به‌روزرسانی</b>: برنامه هنگام شروع نسخه‌های GitHub را بررسی می‌کند و برای نسخهٔ جدید بنر نشان می‌دهد. روی ویندوز دانلود می‌کند، SHA-256 را تأیید و خودش را جایگزین می‌کند؛ روی مک و لینوکس بسته را دانلود می‌کند و پوشه را برایتان باز می‌کند.', ru: '<b>Обновления</b>: при запуске проверяются релизы GitHub, при новой версии появляется баннер. На Windows пакет скачивается, проверяется SHA-256 и заменяется на месте; на macOS и Linux пакет скачивается и открывается папка.', zh: '<b>更新</b>：启动时检查 GitHub 发布，有新版本时显示横幅。Windows 上会下载、校验 SHA-256 并原地替换；macOS 和 Linux 上会下载安装包并为你打开文件夹。' });
+  const links = `<a class="btn" href="https://github.com/Nethyric/orca#readme" target="_blank" rel="noopener">${ico('external')} README</a> <a class="btn" href="https://github.com/Nethyric/orca/blob/main/docs/setup.md" target="_blank" rel="noopener">${ico('external')} ${T({ en: 'Setup guide', fa: 'راهنمای نصب', ru: 'Установка', zh: '安装指南' })}</a> <a class="btn" href="https://github.com/Nethyric/orca/blob/main/docs/api.md" target="_blank" rel="noopener">${ico('external')} API</a> <a class="btn" href="https://github.com/Nethyric/orca/issues" target="_blank" rel="noopener">${ico('external')} ${T({ en: 'Report a problem', fa: 'گزارش مشکل', ru: 'Сообщить о проблеме', zh: '报告问题' })}</a>`;
+  const tabs = [['start', T({ en: 'Getting started', fa: 'شروع', ru: 'Начало', zh: '入门' })], ['modes', T({ en: 'Modes & autonomy', fa: 'حالت‌ها و خودمختاری', ru: 'Режимы', zh: '模式' })], ['cmds', T({ en: 'Commands & shortcuts', fa: 'دستورها و میان‌برها', ru: 'Команды', zh: '命令' })], ['about', T({ en: 'About', fa: 'درباره', ru: 'О программе', zh: '关于' })]];
+  const cur = section || 'start';
+  const pages = {
+    start: `<p>${esc(T({ en: 'ORCA is an autonomous agent: it reads and writes files in your workspace, runs commands, searches the web, understands images and builds whole projects — while you watch every step in the timeline.', fa: 'ORCA یک عامل خودمختار است: در فضای کاری شما فایل می‌خواند و می‌نویسد، دستور اجرا می‌کند، وب را جست‌وجو می‌کند، تصویر می‌فهمد و پروژه‌های کامل می‌سازد — و شما هر قدم را در تایم‌لاین می‌بینید.', ru: 'ORCA — автономный агент: читает и пишет файлы в рабочей папке, выполняет команды, ищет в вебе, понимает изображения и собирает целые проекты — а вы видите каждый шаг в таймлайне.', zh: 'ORCA 是自主代理：在工作区读写文件、运行命令、搜索网络、理解图片并构建完整项目 — 每一步都显示在时间线中。' }))}</p><ol class="help-steps"><li>${esc(T({ en: 'Pick a workspace folder (top bar) — everything the agent creates lands there.', fa: 'پوشهٔ فضای کاری را انتخاب کنید (نوار بالا) — هر چیزی که عامل می‌سازد آن‌جا می‌رود.', ru: 'Выберите рабочую папку (верхняя панель) — всё созданное агентом попадает туда.', zh: '选择工作区文件夹（顶栏）— 代理创建的一切都放在那里。' }))}</li><li>${esc(T({ en: 'Type what you want in plain language; attach files or images with the clip. Shift+Enter makes a new line.', fa: 'خواسته‌تان را به زبان ساده بنویسید؛ با گیره فایل یا عکس پیوست کنید. Shift+Enter خط جدید می‌سازد.', ru: 'Опишите задачу своими словами; файлы и картинки — через скрепку. Shift+Enter — новая строка.', zh: '用自然语言描述需求；用回形针附加文件或图片。Shift+Enter 换行。' }))}</li><li>${esc(T({ en: 'Watch the right panel: Timeline (tools), Files, Changes (restore any edit), Preview (live site) and Notes.', fa: 'پنل راست را ببینید: تایم‌لاین (ابزارها)، فایل‌ها، تغییرات (بازگردانی هر ویرایش)، پیش‌نمایش (سایت زنده) و یادداشت‌ها.', ru: 'Следите за правой панелью: Таймлайн, Файлы, Изменения (откат любой правки), Предпросмотр и Заметки.', zh: '关注右侧面板：时间线（工具）、文件、更改（可恢复任何编辑）、预览（实时站点）和笔记。' }))}</li></ol><p>${sites}</p><p>${models}</p>`,
+    modes: `<ul class="help-list">${modes}</ul><p>${auton}</p><p>${esc(T({ en: 'Tip: ask “what can you do?” — the answer reflects the real capabilities of this installation (connected models, vision, tools, platform binaries).', fa: 'نکته: بپرسید «چه کارهایی می‌توانی بکنی؟» — پاسخ بر اساس قابلیت‌های واقعی همین نصب است (مدل‌های وصل‌شده، بینایی، ابزارها، باینری‌ها).', ru: 'Совет: спросите «что ты умеешь?» — ответ отражает реальные возможности этой установки.', zh: '提示：问“你能做什么？”— 回答反映的是当前安装的真实能力（已连接模型、视觉、工具、平台程序）。' }))}</p>`,
+    cmds: `<h3>${T({ en: 'Slash commands', fa: 'دستورهای اسلش', ru: 'Slash-команды', zh: '斜杠命令' })}</h3><div class="shortcut-grid">${slash}</div><h3>${t('shortcuts')}</h3><div class="shortcut-grid">${SHORTCUTS.map(([k, l]) => `<div><span>${t(l)}</span><kbd>${k}</kbd></div>`).join('')}<div><span>${t('inputPh').split('(')[0]}</span><kbd>Shift ↵</kbd></div><div><span>${T({ en: 'Leave full-window preview', fa: 'خروج از پیش‌نمایش تمام‌صفحه', ru: 'Выйти из полноэкранного предпросмотра', zh: '退出全屏预览' })}</span><kbd>Esc</kbd></div></div>`,
+    about: `<p><b>ORCA</b> · ${esc(T({ en: 'version', fa: 'نسخه', ru: 'версия', zh: '版本' }))} ${esc(S.health?.version || '')} · ${esc(T({ en: 'made by', fa: 'ساختهٔ', ru: 'сделано', zh: '开发者' }))} <b>Nethyric</b></p><p>${upd}</p><p>${esc(T({ en: 'Privacy: chats, files and keys stay on this computer. Built-in model traffic goes directly from your machine to the provider; nothing is relayed through a middle server.', fa: 'حریم خصوصی: گفتگوها، فایل‌ها و کلیدها روی همین کامپیوتر می‌مانند. ترافیک مدل‌های داخلی مستقیم از دستگاه شما به ارائه‌دهنده می‌رود؛ هیچ سرور واسطی در کار نیست.', ru: 'Приватность: чаты, файлы и ключи остаются на этом компьютере. Трафик встроенных моделей идёт напрямую к провайдеру, без промежуточного сервера.', zh: '隐私：对话、文件和密钥保存在本机。内置模型流量直接从你的设备发往提供商，不经过中间服务器。' }))}</p><p class="help-links">${links}</p>`,
+  };
+  modal(`<div class="help"><h2>${ico('question')}${t('help')}</h2><div class="help-tabs">${tabs.map(([k, l]) => `<button class="${k === cur ? 'active' : ''}" data-h="${k}">${l}</button>`).join('')}</div><div class="help-page">${pages[cur]}</div></div>`);
+  $$('.help-tabs button').forEach((b) => (b.onclick = () => showHelp(b.dataset.h)));
 }
 function showShortcuts() { modal(`<h2>${ico('keyboard')}${t('shortcuts')}</h2><div class="shortcut-grid">${SHORTCUTS.map(([k, l]) => `<div><span>${t(l)}</span><kbd>${k}</kbd></div>`).join('')}<div><span>${t('inputPh').split('(')[0]}</span><kbd>Shift ↵</kbd></div></div>`); }
 function openCmdk() { cmdk.classList.remove('hidden'); cmdkIn.value = ''; renderCmdk(''); cmdkIn.focus(); }
@@ -935,13 +1036,14 @@ cmdk.onclick = (e) => { if (e.target.id === 'cmdk') closeCmdk(); };
 
 document.onkeydown = (e) => {
   const mod = e.ctrlKey || e.metaKey; const k = e.key.toLowerCase();
-  if (e.key === 'Escape') { if (!cmdk.classList.contains('hidden')) closeCmdk(); else if (!$('#modal').classList.contains('hidden')) closeModal(); else stopAll(); return; }
+  if (e.key === 'Escape') { if (!cmdk.classList.contains('hidden')) closeCmdk(); else if (!$('#modal').classList.contains('hidden')) closeModal(); else if (PV.full) setPreviewFull(false); else stopAll(); return; }
   if (mod && k === 'k') { e.preventDefault(); openCmdk(); }
   else if (mod && k === 'n') { e.preventDefault(); newChat(); }
   else if (mod && k === 'b') { e.preventDefault(); S._railUser = true; $('#rail').classList.toggle('collapsed'); }
   else if (mod && e.key === '.') { e.preventDefault(); togglePanel(); }
   else if (mod && e.key === ',') { e.preventDefault(); openSettings(); }
   else if (mod && e.key === '/') { e.preventDefault(); showShortcuts(); }
+  else if (e.key === 'F1') { e.preventDefault(); showHelp(); }
   else if (mod && e.shiftKey && k === 'l') { e.preventDefault(); $('#tb-theme').click(); }
   else if (mod && e.shiftKey && k === 'f') { e.preventDefault(); $('#rail').classList.remove('collapsed'); $('#search').focus(); }
 };
@@ -972,4 +1074,5 @@ document.addEventListener('click', (e) => { if (window.innerWidth > 1240) return
   // update check (non-blocking): banner appears only when a newer release exists
   setTimeout(async () => { try { const u = await api('/api/update'); if (u.available && S.cfg.autoUpdate !== false && S.cfg.dismissedUpdate !== u.latest) updBanner(u); } catch (_) {} }, 2500);
 })();
+window.ORCA = Object.assign(window.ORCA || {}, { previewFile, setPreviewFull, showHelp, openSettings, PV });
 })();

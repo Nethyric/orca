@@ -22,6 +22,7 @@ const BUILTIN_MODELS = [
   { key: 'minimax',  label: 'MiniMax M2.7',      vendor: 'MiniMax',  provider: 'vault', model: 'orca/minimax',  maxTokens: 4096, tier: 'strong', note: { fa: 'قوی‌ترین — استدلال عمیق و کارهای طولانی', en: 'Strongest — deep reasoning, long tasks', ru: 'Самая сильная — глубокие рассуждения, долгие задачи', zh: '最强 — 深度推理、长任务' } },
   { key: 'deepseek', label: 'DeepSeek V4 Flash', vendor: 'DeepSeek', provider: 'vault', model: 'orca/deepseek', maxTokens: 4096, tier: 'fast',   note: { fa: 'سریع‌ترین — پاسخ تمیز و کوتاه', en: 'Fastest — clean, concise answers', ru: 'Самая быстрая — чёткие короткие ответы', zh: '最快 — 简洁清晰的回答' } },
   { key: 'glm',      label: 'GLM 5.3 Flash',     vendor: 'Zhipu',    provider: 'vault', model: 'orca/glm',      maxTokens: 4096, tier: 'backup', note: { fa: 'پشتیبان', en: 'Backup', ru: 'Резерв', zh: '备用' } },
+  { key: 'glimmer',  label: 'Glimmer 30B',       vendor: 'Meta',     provider: 'vault', model: 'orca/glimmer',  maxTokens: 4096, tier: 'vision', vision: true, note: { fa: 'تصویر می‌بیند — عکس، اسکرین‌شات، UI', en: 'Sees images — photos, screenshots, UI', ru: 'Видит изображения — фото, скриншоты, UI', zh: '能看图 — 照片、截图、界面' } },
 ];
 let remoteModels = null; // set by vault.js when the vault publishes a model list
 function setRemoteModels(list) { remoteModels = Array.isArray(list) && list.length ? list.map((m) => ({ maxTokens: 4096, provider: 'vault', tier: 'custom', ...m })) : null; _cfg = null; }

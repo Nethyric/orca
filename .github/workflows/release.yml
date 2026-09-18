@@ -1,4 +1,4 @@
-name: Release (Windows build)
+name: Release (Windows · macOS · Linux)
 
 on:
   push:
@@ -9,8 +9,28 @@ permissions:
   contents: write
 
 jobs:
-  build-windows:
-    runs-on: ubuntu-latest
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            os: ubuntu-latest
+            target: win
+            script: dist:win
+            arch: x64
+          - name: macOS (x64 + arm64)
+            os: macos-14
+            target: mac
+            script: dist:mac
+            arch: arm64
+          - name: Linux x64
+            os: ubuntu-latest
+            target: linux
+            script: dist:linux
+            arch: x64
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -20,19 +40,50 @@ jobs:
       - name: Install
         run: npm ci --no-audit --no-fund
       - name: Fetch bundled binaries (ffmpeg, yt-dlp, tessdata)
+        env:
+          ORCA_TARGET: ${{ matrix.target }}
+          ORCA_ARCH: ${{ matrix.arch }}
         run: node scripts/fetch-bins.js
-      - name: Build portable zip
+      - name: Build
         env:
           ORCA_VAULT_KEY: ${{ secrets.ORCA_VAULT_KEY }}
-        run: npm run dist:win
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: npm run ${{ matrix.script }}
+      - name: Collect artifacts
+        shell: bash
+        run: |
+          mkdir -p out
+          cp release/ORCA-Agent-*.zip release/ORCA-Agent-*.dmg release/ORCA-Agent-*.AppImage release/ORCA-Agent-*.tar.gz out/ 2>/dev/null || true
+          cp release/README-*.txt out/ 2>/dev/null || true
+          ls -la out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: out/*
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
       - name: Checksums
-        run: cd release && sha256sum *.zip > SHA256SUMS
+        run: |
+          cd dist
+          rm -f SHA256SUMS
+          sha256sum ORCA-Agent-* > SHA256SUMS
+          cat SHA256SUMS
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            release/*.zip
-            release/SHA256SUMS
+            dist/ORCA-Agent-*
+            dist/README-*.txt
+            dist/SHA256SUMS
             remote/vault.json
           generate_release_notes: true
           draft: false

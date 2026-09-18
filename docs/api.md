@@ -32,7 +32,7 @@ All request and response bodies are JSON (`content-type: application/json`) unle
 ### `GET /api/health`
 
 ```json
-{ "ok": true, "version": "0.0.3", "builtin": true, "vault": true, "repo": "Nethyric/orca",
+{ "ok": true, "version": "0.0.4", "builtin": true, "vault": true, "repo": "Nethyric/orca",
   "tools": ["run_shell", "…"], "electron": false,
   "bins": { "ffmpeg": true, "ytdlp": true, "chrome": true }, "vision": false,
   "judge": { "configured": false, "enabled": false, "model": "jev-latest", "cooling": false, "stats": { "calls": 0, "ok": 0, "failed": 0, "inputTokens": 0, "outputTokens": 0, "avgMs": 0, "lastError": "" } } }
@@ -193,7 +193,7 @@ Returns the public view of the configuration: everything in `config.json` with s
   "models": [ { "key": "auto", "label": "ORCA", "tier": "auto", "builtin": true },
               { "key": "minimax", "label": "MiniMax M2.7", "vendor": "MiniMax", "tier": "strong", "builtin": true, "ready": true },
               { "key": "groq/llama-3.3-70b-versatile", "label": "llama-3.3-70b-versatile", "vendor": "Groq", "builtin": false, "ready": true } ],
-  "builtin": true, "version": "0.0.3", "dataDir": "…", "workspaceDir": "…",
+  "builtin": true, "version": "0.0.4", "dataDir": "…", "workspaceDir": "…",
   "app": { "name": "ORCA", "company": "Nethyric", "repo": "Nethyric/orca", "homepage": "…" }
 }
 ```
@@ -212,8 +212,8 @@ All keys are documented in [configuration.md](configuration.md).
 
 | Method & path | Body / query | Response |
 |---|---|---|
-| `GET /api/providers/catalog[?refresh=1]` | — | `{ providers: [ { id, name, api, env, count, local, anthropic } ], featured: [ids] }` — the models.dev catalog plus local servers and `custom`, cached for 24 h |
-| `GET /api/providers/models?id=<providerId>` | — | `{ api, models: [ { id, name, reasoning, toolCall, attachment, context, output, free } ] }` — catalog models for a provider |
+| `GET /api/providers/catalog[?refresh=1]` | — | `{ providers: [ { id, name, api, env, count, local, doc, anthropic } ], featured: [ids] }` — the models.dev catalog plus gateways and local servers not in it, cached for 24 h |
+| `GET /api/providers/models?id=<providerId>` | — | `{ api, models: [ { id, name, reasoning, toolCall, attachment, context, output, input, outputCost, free } ] }` — catalog models for a provider; for gateways with a public `/models` endpoint the list is fetched live (free models first, `input`/`outputCost` in USD per million tokens) |
 | `POST /api/providers/discover` | `{ baseUrl, apiKey?, api?, id? }` | `{ models: [ { id, name } ], error? }` — asks the endpoint's `/models`. With `id` of a saved provider, its stored key/URL are used when omitted |
 | `POST /api/models/test` | `{ key }` **or** `{ baseUrl, apiKey, model, api? }` | `{ ok: true, ms, sample }` or `{ ok: false, status, error, ms }` — a one-token round trip through a configured model key or an arbitrary endpoint |
 
@@ -223,7 +223,7 @@ All keys are documented in [configuration.md](configuration.md).
 
 ```json
 { "enabled": true, "ok": true, "source": "https://raw.githubusercontent.com/…/remote/vault.json",
-  "fetchedAt": 1789559349816, "issued": "2026-09-16T10:00:00Z", "aliases": ["minimax", "deepseek", "glm"], "keys": 5, "error": "", "disabled": [] }
+  "fetchedAt": 1789559349816, "issued": "2026-09-16T10:00:00Z", "aliases": ["minimax", "deepseek", "glm", "glimmer"], "keys": 16, "error": "", "disabled": [] }
 ```
 
 Never returns key material. `refresh=1` forces a re-fetch. See [vault.md](vault.md).
@@ -258,9 +258,9 @@ See [decision-engine.md](decision-engine.md).
 
 | Method & path | Body / query | Response |
 |---|---|---|
-| `GET /api/update[?force=1]` | — | `{ available, version, latest, url, notes, asset: { name, url, size }, sums, minVersion, mustUpdate, error, checkedAt, download: { …progress }, vault, remote, repo, channel }` |
+| `GET /api/update[?force=1]` | — | `{ available, version, latest, url, notes, asset: { name, url, size }, sums, minVersion, mustUpdate, error, checkedAt, download: { …progress }, vault, remote, repo, channel }` — `asset` is the release file for this OS and CPU (`win-x64.zip`, `mac-<arch>.zip`/`.dmg`, `linux-<arch>.AppImage`/`.tar.gz`) |
 | `POST /api/update/download` | — | `{ ok }` — progress arrives as `update` SSE events (`{ download: { percent, bytes, total, ready, error } }`) |
-| `POST /api/update/apply` | — | `{ restarting: true }` — verifies the hash, swaps the app folder, exits so the launcher restarts (`400` with `error` if not ready) |
+| `POST /api/update/apply` | — | Windows and Linux AppImage: `{ restarting: true }` — swaps the verified package in place and exits so the app relaunches. macOS and Linux tar.gz: `{ manual: true, zip, note }` — the verified package is revealed in the file manager. `400` with `error` if nothing is downloaded |
 | `POST /api/update/dismiss` | `{ version }` | `{ ok }` |
 | `POST /api/update/simulate` | `{ version?, notes? }` | dev only (`ORCA_DEV=1`): broadcasts a fake update event |
 
