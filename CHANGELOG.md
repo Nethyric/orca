@@ -4,6 +4,21 @@ All notable changes to ORCA are documented here. The format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.0.6] — 2026-09-18
+
+### Changed
+- **Self-update that needs no browser and no GitHub.** The updater was rebuilt end to end:
+  - **Install on every platform inside the app.** Windows swaps the portable folder and relaunches (PowerShell helper with `cmd` fallback; robocopy when a rename is refused; the previous folder is restored if the swap fails). **macOS now replaces the `.app` bundle in place** (built-in zip reader that keeps symlinks and modes, quarantine flag cleared, app reopened) instead of revealing the download. Linux AppImage replaces itself; **Linux tar.gz now swaps the app folder** and relaunches. User data lives in the data folder and is never touched.
+  - **Resumable, mirrored, verified downloads.** Interrupted downloads continue with `Range`; when `github.com` does not answer, public mirrors are tried (every byte is still checked against the release's SHA-256 digest / `SHA256SUMS`, so a mirror cannot substitute a file); a stalled connection (no bytes for 45 s) moves on to the next source; a mismatching file is discarded with a clear message. **Cancel** keeps the partial file.
+  - **Background download.** With *Download updates in the background* (default on, packaged builds only) the new version is fetched and verified while you work; the banner then only asks for **Restart & install**. A package downloaded in a previous session is recognised on start.
+  - **Honest states everywhere.** Banner and Settings → Updates share one state machine: available → downloading (MB, speed, ETA, *via mirror*) → verifying → downloaded · verified → installing → restarting, plus *download failed* / *install failed* with **Retry** and *Open download page* as a last resort. The next start shows *Updated to ORCA x.y.z* — or that the update could not be installed and the previous version was kept. Release notes are the version's CHANGELOG section (the release body used to be a bare compare link).
+  - **Works when the GitHub API is blocked or rate-limited**: the release is discovered through the `latest` redirect and `SHA256SUMS` (also via mirrors); notes come from `CHANGELOG.md` via raw/jsDelivr.
+  - Source checkouts and web mode (`npm start`, `node src/server.js`) are detected (`kind: dev`): the package is downloaded, verified and revealed; the UI says so instead of promising a one-click install.
+  - A second **Restart & install** click while the first is running no longer launches a second helper; a damaged pending package is detected before anything is touched.
+- Routes: `GET /api/update` gained `kind`, `inApp`, `install`, `pending`, `lastInstall`, `download.speed/eta/mirror/phase/verified`; new `POST /api/update/cancel`; `POST /api/update/apply` reports install progress over SSE; `POST /api/update/simulate` accepts `state`. Config: `autoDownload`.
+- Tests: `node test/update.test.js` — zip reader (stored/deflate, modes, symlinks, zip-slip), cancel/resume/mirror/verify against a local range-capable server, Windows swap script under real PowerShell, Linux folder swap with real relaunch, damaged/mismatching packages. `npm test` runs it.
+
+
 ## [0.0.5] — 2026-09-18
 
 ### Added

@@ -67,6 +67,7 @@ const DEFAULT_CONFIG = {
   cookiesBrowser: '',                                                       // 'chrome' | 'firefox' | 'edge' … (yt-dlp --cookies-from-browser)
   // 1.5: updates
   autoUpdate: true,
+  autoDownload: true,        // fetch new versions in the background; the user only confirms the restart
   dismissedUpdate: '',
 };
 

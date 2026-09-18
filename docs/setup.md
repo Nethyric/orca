@@ -33,11 +33,14 @@ Windows SmartScreen may warn because the executable is not code-signed — choos
 
 ### Updates
 
-ORCA checks GitHub Releases on start and every few hours and shows a banner with the release notes (Settings → Updates). The package for your platform and CPU is downloaded and verified against `SHA256SUMS`, then:
+Nobody needs to visit GitHub to stay current. ORCA checks the project's release channel on start and every few hours; when a newer version exists, a banner appears and — with *Download updates in the background* on (default) — the package for your platform and CPU is fetched while you work. Every download is resumable, falls back to public mirrors when `github.com` is blocked, and is verified against the release's SHA-256 before anything is touched. Then you press **Restart & install**:
 
-- **Windows**: the app swaps itself in place and restarts.
-- **Linux AppImage**: the AppImage file is replaced in place and relaunched.
-- **macOS / Linux tar.gz**: the verified package is revealed in your file manager — drop it over the current install and relaunch.
+- **Windows** (portable folder): the new version is extracted next to the app, the folder is swapped after ORCA exits and the app relaunches. If the swap fails, the previous folder is restored.
+- **macOS**: the `.app` bundle is replaced in place (quarantine flag cleared) and reopened.
+- **Linux AppImage**: the file is replaced in place and relaunched.
+- **Linux tar.gz**: the app folder is swapped like on Windows.
+
+The next start shows *Updated to ORCA x.y.z* (or the reason it could not be installed — the old version is kept in that case). Settings → Updates has the full state: installed/latest version, package size, download progress with speed and ETA, the release notes, **Cancel**/**Retry**, and switches for automatic checks and background downloads. Chats, files and keys live in the data folder and are never touched by an update. Running from source (`npm start`, web mode) only downloads and verifies the package and reveals it in the file manager.
 
 ## Run from source
 

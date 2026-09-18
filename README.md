@@ -51,7 +51,7 @@ Download the build for your system from [Releases](https://github.com/Nethyric/o
 | macOS 12+ (Intel) | `ORCA-Agent-<version>-mac-x64.dmg` / `.zip` | same |
 | Linux x64 | `ORCA-Agent-<version>-linux-x64.AppImage` / `.tar.gz` | `chmod +x` and run |
 
-Builds are not code-signed; `SHA256SUMS` is attached to every release. The app checks for new releases itself (Settings → Updates).
+Builds are not code-signed; `SHA256SUMS` is attached to every release. The app updates itself: it checks the release channel, downloads the package for your OS/CPU in the background (resumable, mirrors when GitHub is blocked), verifies the SHA-256 and installs it on restart — no browser needed (Settings → Updates).
 
 **From source** (Windows, macOS, Linux):
 

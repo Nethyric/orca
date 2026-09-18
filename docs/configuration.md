@@ -71,8 +71,9 @@ Fonts: Inter for Latin and Cyrillic, Vazirmatn for Persian (RTL layout), Noto Sa
 
 | Key | Description |
 |---|---|
-| `autoUpdate` | Check GitHub Releases on start and every 6 hours (default `true`) |
-| `dismissedUpdate` | Version whose banner you dismissed |
+| `autoUpdate` | Check the release channel on start and every 6 hours (default `true`) |
+| `autoDownload` | Download a new version in the background as soon as it is found, verified and ready to install on restart (default `true`; packaged builds only) |
+| `dismissedUpdate` | Version whose banner you dismissed with *Later* (a finished background download still shows the *Restart & install* banner) |
 
 `orca.config.json` in the app folder holds the build identity: `name`, `company`, `repo` (used for the update check and vault sources), `homepage`, `updateChannel`, `defaultLanguage`, `vaultPublicKey`. Forks change it with `npm run set-repo -- Owner/repo`.
 

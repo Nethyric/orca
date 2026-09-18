@@ -20,7 +20,7 @@ const readme = which === 'mac' ? [
   'Files:    ~/Library/Application Support/ORCA Agent/data/workspace   (change in Settings)',
   '',
   'Languages: English (default), فارسی, Русский, 中文 — language button in the title bar.',
-  'Updates:  ORCA checks GitHub Releases; on macOS it downloads the new build and opens the folder for you.',
+  'Updates:  ORCA updates itself — the new build is downloaded in the background, verified (SHA-256) and the app bundle is replaced on restart.',
 ] : [
   `ORCA Agent ${pkg.version} — Linux x64`,
   '',
@@ -32,7 +32,7 @@ const readme = which === 'mac' ? [
   '',
   'Sandbox:  if the app refuses to start on a hardened kernel, run with --no-sandbox.',
   'Languages: English (default), فارسی, Русский, 中文 — language button in the title bar.',
-  'Updates:  ORCA checks GitHub Releases; on Linux it downloads the new build and opens the folder for you.',
+  'Updates:  ORCA updates itself — the new build is downloaded in the background, verified (SHA-256) and swapped in on restart (AppImage and tar.gz).',
 ];
 fs.writeFileSync(path.join(rel, `README-${which}.txt`), readme.join('\n') + '\n');
 

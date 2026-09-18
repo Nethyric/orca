@@ -508,24 +508,78 @@ let renderTimer = null; const dirty = new Set();
 function scheduleRender(L) { dirty.add(L); if (renderTimer) return; const longest = Math.max(...[...dirty].map((x) => x.content.length)); const every = longest > 40000 ? 400 : longest > 12000 ? 200 : longest > 4000 ? 120 : 70; renderTimer = setTimeout(() => { renderTimer = null; const stick = nearBottom(); for (const L of dirty) { const c = $('.content', L.el); c.innerHTML = md(L.content, true); c.dir = detectDir(L.content); if (L.reasoning) { const th = $('.thought', L.el); th.classList.remove('hidden'); th.classList.add('live'); if (P.showReasoning && !th.dataset.touched) th.open = true; const b = $('.th-body', th); b.textContent = L.reasoning; b.scrollTop = 1e9; $('.th-time', th).textContent = ((Date.now() - L.t0) / 1000).toFixed(0) + 's'; } } dirty.clear(); if (stick) thread.scrollTop = 1e9; }, every); }
 document.addEventListener('toggle', (e) => { if (e.target.classList?.contains('thought')) e.target.dataset.touched = '1'; }, true);
 
+const fmtMB = (b) => (b >= 1073741824 ? (b / 1073741824).toFixed(2) + ' GB' : (b / 1048576).toFixed(b >= 104857600 ? 0 : 1) + ' MB');
+const fmtEta = (s) => (s == null ? '' : s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`);
+// One state object for the banner and Settings → Updates: { available, latest, version, notes, url, asset, kind, inApp, download:{…}, install:{…}, lastInstall, error }
+const updActions = {
+  download: () => { api('/api/update/download', { method: 'POST' }); updBanner({ install: {}, download: { active: true, pct: 0, bytes: 0, phase: 'download' } }); },
+  cancel: () => api('/api/update/cancel', { method: 'POST' }),
+  retry: () => { updBanner({ install: {}, download: { active: true, pct: 0, bytes: 0, error: '', phase: 'download' } }); api('/api/update/download', { method: 'POST' }); },
+  apply: async () => {
+    updBanner({ install: { active: true, phase: 'verify' } });
+    const r = await api('/api/update/apply', { method: 'POST' });
+    if (r.error) { updBanner({ install: { active: false, phase: 'error', error: r.error } }); toast(r.error, 'err'); }
+    else if (r.manual) { updBanner({ install: { active: false, phase: 'manual', note: r.note } }); toast(r.note || tu('manualNote'), 'ok'); }
+    else updBanner({ install: { active: false, phase: 'restarting' } });
+  },
+  later: () => { const bar = $('#upd-bar'); if (bar) bar.remove(); S.upd.dismissed = S.upd.latest; api('/api/update/dismiss', { method: 'POST', body: { version: S.upd.latest } }); },
+};
+function updPhaseText(u) { // shared by banner + settings: what is happening right now, one line
+  const d = u.download || {}, i = u.install || {};
+  if (i.phase === 'restarting') return { k: 'restarting', text: tu('restarting'), busy: true };
+  if (i.active) return { k: 'installing', text: /^extract/.test(i.phase) ? `${tu('installing')} ${i.phase.replace('extract', '').trim()}` : tu('installing'), busy: true };
+  if (i.phase === 'error') return { k: 'error', text: `${tu('installFailed')}: ${i.error || ''}` };
+  if (i.phase === 'manual') return { k: 'manual', text: i.note || tu('manualNote') };
+  if (d.ready) return { k: 'ready', text: tu('ready') + (d.verified ? ' · ' + tu('verified') : '') };
+  if (d.active && d.phase === 'verify') return { k: 'verify', text: tu('verifying'), busy: true };
+  if (d.active) return { k: 'downloading', text: `${tu('downloading')}${d.total ? ` ${fmtMB(d.bytes || 0)} / ${fmtMB(d.total)}` : ''}${d.speed ? ` · ${fmtMB(d.speed)}/s` : ''}${d.eta != null && d.eta > 0 ? ` · ${fmtEta(d.eta)}` : ''}${d.mirror ? ' · ' + tu('viaMirror') : ''}`, busy: true, pct: d.pct || 0 };
+  if (d.error) return { k: 'dlError', text: `${tu('dlFailed')}: ${d.error}` };
+  if (u.available) return { k: 'available', text: tu('available')(u.latest) };
+  return { k: 'none', text: u.error ? `${tu('error')}: ${u.error}` : tu('upToDate') };
+}
 function updBanner(d) {
+  if (d && d.download && !d.install && S.upd && S.upd.install && (d.download.active || d.download.error) && !S.upd.install.active) d = { ...d, install: {} };
   S.upd = { ...(S.upd || {}), ...d };
   const u = S.upd; let bar = $('#upd-bar');
-  if (u.dismissed === u.latest && !u.mustUpdate) return;
+  if (!u.available && !(u.download && (u.download.active || u.download.ready)) && !(u.install && u.install.active)) { if (bar) bar.remove(); paintUpdSettings(u); return; }
+  if (u.dismissed === u.latest && !u.mustUpdate && !(u.install && u.install.active)) { paintUpdSettings(u); return; } // "Later" hides it for this session; a downloaded package is offered again on the next start
   if (!bar) { bar = el('div', 'upd-bar'); bar.id = 'upd-bar'; $('#main').prepend(bar); }
   bar.classList.toggle('must', !!u.mustUpdate);
-  const dlst = u.download || {};
+  const ph = updPhaseText(u); const ver = u.latest ? `<span class="pill acc">${esc(u.latest)}</span>` : '';
   let mid = '';
-  const isWin = !desktop || desktop.platform === 'win32';
-  if (dlst.ready) mid = `<b>${tu('ready')}</b><span class="sp"></span><button class="btn btn-primary" id="ub-apply">${isWin ? tu('restart') : tu('install')}</button>`;
-  else if (dlst.active) mid = `<span>${tu('downloading')}</span><progress max="100" value="${dlst.pct || 0}"></progress><span class="mono small">${dlst.pct || 0}%</span><span class="sp"></span>`;
-  else if (dlst.error) mid = `<b>${tu('error')}</b><span class="small">${esc(dlst.error)}</span><span class="sp"></span><a class="btn" href="${esc(u.url || '#')}" target="_blank" rel="noopener">${tu('manual')}</a><button class="btn" id="ub-later">${tu('later')}</button>`;
-  else mid = `<b>${tu('available')(u.latest)}</b>${u.mustUpdate ? `<span>${tu('must')}</span>` : ''}<span class="sp"></span>${u.asset !== false ? `<button class="btn btn-primary" id="ub-dl">${tu('download')}</button>` : ''}<a class="btn" href="${esc(u.url || '#')}" target="_blank" rel="noopener">${tu('notes')}</a>${u.mustUpdate ? '' : `<button class="btn" id="ub-later">${tu('later')}</button>`}`;
-  bar.innerHTML = `<span class="upd-ico">${ico('update')}</span>${mid}<button class="ib sm upd-x" id="ub-x" data-tip="${esc(tu('later'))}">${ico('x')}</button>`;
+  const inApp = u.inApp !== false && u.kind !== 'dev';
+  const notesBtn = u.notes ? `<button class="btn" id="ub-notes">${tu('notes')}</button>` : (u.url ? `<a class="btn" href="${esc(u.url)}" target="_blank" rel="noopener">${tu('notes')}</a>` : '');
+  if (ph.k === 'restarting') mid = `<b>${esc(ph.text)}</b><span class="sp"></span><span class="spin"></span>`;
+  else if (ph.k === 'installing' || ph.k === 'verify') mid = `<b>${esc(ph.text)}</b><progress></progress><span class="sp"></span>`;
+  else if (ph.k === 'ready') mid = `<b>${esc(ph.text)}</b>${ver}<span class="sp"></span><button class="btn btn-primary" id="ub-apply">${ico('rocket')}${inApp ? tu('restart') : tu('install')}</button>${notesBtn}${u.mustUpdate ? '' : `<button class="btn" id="ub-later">${tu('later')}</button>`}`;
+  else if (ph.k === 'downloading') mid = `<span>${esc(ph.text)}</span><progress max="100" value="${ph.pct}"></progress><span class="mono small">${ph.pct}%</span><span class="sp"></span><button class="btn" id="ub-cancel">${tu('cancel')}</button>`;
+  else if (ph.k === 'dlError' || ph.k === 'error') mid = `<b>${esc(ph.text)}</b><span class="sp"></span><button class="btn btn-primary" id="ub-retry">${tu('retry')}</button><a class="btn" href="${esc(u.url || '#')}" target="_blank" rel="noopener">${tu('manual')}</a><button class="btn" id="ub-later">${tu('later')}</button>`;
+  else if (ph.k === 'manual') mid = `<b>${tu('ready')}</b><span class="small">${esc(ph.text)}</span><span class="sp"></span><button class="btn" id="ub-later">${tu('later')}</button>`;
+  else mid = `<b>${tu('available')(u.latest)}</b>${u.mustUpdate ? `<span>${tu('must')}</span>` : `<span class="small">${esc(!u.asset ? tu('noAsset') : inApp ? tu('oneClick') : tu('devHint'))}</span>`}<span class="sp"></span>${u.asset ? `<button class="btn btn-primary" id="ub-dl">${ico('download')}${inApp ? tu('updateNow') : tu('download')}</button>` : `<a class="btn btn-primary" href="${esc(u.url || '#')}" target="_blank" rel="noopener">${tu('manual')}</a>`}${notesBtn}${u.mustUpdate ? '' : `<button class="btn" id="ub-later">${tu('later')}</button>`}`;
+  bar.innerHTML = `<span class="upd-ico${ph.busy ? ' busy' : ''}">${ico('update')}</span>${mid}<button class="ib sm upd-x" id="ub-x" data-tip="${esc(tu('later'))}">${ico('x')}</button>`;
   if ($('#ub-x')) $('#ub-x').onclick = () => { bar.remove(); S.upd.dismissed = u.latest; if (!u.mustUpdate) api('/api/update/dismiss', { method: 'POST', body: { version: u.latest } }); };
-  if ($('#ub-dl')) $('#ub-dl').onclick = () => { api('/api/update/download', { method: 'POST' }); updBanner({ download: { active: true, pct: 0 } }); };
-  if ($('#ub-apply')) $('#ub-apply').onclick = async () => { const r = await api('/api/update/apply', { method: 'POST' }); if (r.error) toast(r.error, 'err'); else if (r.manual) toast(r.note || tu('manualNote'), 'ok'); };
-  if ($('#ub-later')) $('#ub-later').onclick = () => { bar.remove(); S.upd.dismissed = u.latest; api('/api/update/dismiss', { method: 'POST', body: { version: u.latest } }); };
+  if ($('#ub-dl')) $('#ub-dl').onclick = updActions.download;
+  if ($('#ub-cancel')) $('#ub-cancel').onclick = updActions.cancel;
+  if ($('#ub-retry')) $('#ub-retry').onclick = updActions.retry;
+  if ($('#ub-apply')) $('#ub-apply').onclick = updActions.apply;
+  if ($('#ub-later')) $('#ub-later').onclick = updActions.later;
+  if ($('#ub-notes')) $('#ub-notes').onclick = () => openSettings('updates');
+  paintUpdSettings(u);
+}
+// Settings → Updates page (only when it is open): same state, more detail
+function paintUpdSettings(u) {
+  if (!u || !$('#upd-msg')) return;
+  const ph = updPhaseText(u); const d = u.download || {};
+  const latest = $('#upd-latest'); if (latest) { latest.innerHTML = `${tu('latest')}: <b>${esc(u.latest || '—')}</b>`; latest.className = 'pill ' + (u.available ? 'acc' : u.latest ? 'ok' : ''); }
+  const ch = $('#upd-channel'); if (ch) ch.textContent = `${u.channel || 'stable'} · ${u.kind === 'dev' ? tu('devBuild') : u.kind === 'win-portable' ? 'Windows' : u.kind === 'mac-app' ? 'macOS' : u.kind === 'linux-appimage' ? 'Linux AppImage' : u.kind === 'linux-dir' ? 'Linux' : ''}${u.asset && u.asset.size ? ` · ${fmtMB(u.asset.size)}` : ''}`;
+  const msg = $('#upd-msg'); if (msg) { msg.textContent = ph.text; msg.className = 'small' + (ph.k === 'error' || ph.k === 'dlError' ? ' err' : ph.k === 'ready' ? ' ok' : ''); }
+  const prog = $('#upd-prog'); if (prog) { prog.classList.toggle('hidden', !(ph.k === 'downloading' || ph.busy)); if (ph.k === 'downloading') { prog.max = 100; prog.value = ph.pct; } else { prog.removeAttribute('value'); } }
+  const show = (id, on) => { const b = $('#' + id); if (b) b.classList.toggle('hidden', !on); };
+  show('upd-check', !ph.busy); show('upd-dl', ph.k === 'available'); show('upd-cancel', ph.k === 'downloading'); show('upd-retry', ph.k === 'dlError' || ph.k === 'error'); show('upd-apply', ph.k === 'ready');
+  const ap = $('#upd-apply'); if (ap) ap.innerHTML = `${ico('rocket')}${u.inApp !== false && u.kind !== 'dev' ? tu('restart') : tu('install')}`;
+  const notes = $('#upd-notes'); if (notes) { notes.classList.toggle('hidden', !(u.available && u.notes)); if (u.available && u.notes) notes.innerHTML = `<div class="upd-notes-h">${tu('notes')} · ${esc(u.latest || '')}</div>` + md(u.notes); }
+  const li = $('#upd-last'); if (li) { const L = u.lastInstall; li.classList.toggle('hidden', !L); if (L) li.innerHTML = L.ok ? `${ico('check')} ${esc(tu('installedOk')(L.version))}` : `${ico('x')} ${esc(tu('installedFail')(L.version))}${L.note ? ` — ${esc(L.note)}` : ''}`; li.className = 'small ' + (L && L.ok ? 'ok' : 'err'); }
+  { const de = $('#cloud-dot2'), se = $('#cloud-state2'); if (de && se) { const g = u.vault || {}; de.className = 'cloud-dot ' + (g.ok ? 'on' : g.enabled ? 'off' : ''); se.textContent = !g.enabled ? tu('cloudOff') : g.ok ? `${tu('cloudOk')} · ${(g.aliases || []).length} ${ts('modelsN')}` : `${tu('cloudDown')}${g.error ? ' (' + g.error + ')' : ''}`; } }
 }
 function handle(p) {
   if (p.event === 'update') { updBanner(p.data || {}); return; }
@@ -922,9 +976,13 @@ async function openSettings(page = 'general') {
   <div class="spage ${page === 'updates' ? 'active' : ''}" data-p="updates">
     ${row(ts('version'), `<span class="pill">${tu('installed')}: <b>${esc(c.version || '')}</b></span> <span class="pill" id="upd-latest">${tu('latest')}: …</span>`)}
     ${row(tu('channel'), `<span class="small mono" id="upd-channel">…</span>`)}
-    ${row(ts('autoUpdate'), sw('st-autoupd', c.autoUpdate !== false))}
-    <div class="form-row" style="gap:8px"><button class="btn" id="upd-check">${ico('undo')}${tu('check')}</button><button class="btn btn-primary hidden" id="upd-dl">${ico('download')}${tu('download')}</button><button class="btn btn-primary hidden" id="upd-apply">${ico('rocket')}${tu('restart')}</button><span class="small" id="upd-msg"></span></div>
+    ${row(ts('autoUpdate'), sw('st-autoupd', c.autoUpdate !== false), tu('autoDesc'))}
+    ${row(tu('autoDownload'), sw('st-autodl', c.autoDownload !== false), tu('autoDlDesc'))}
+    <div class="form-row upd-actions"><button class="btn" id="upd-check">${ico('refresh')}${tu('check')}</button><button class="btn btn-primary hidden" id="upd-dl">${ico('download')}${tu('updateNow')}</button><button class="btn hidden" id="upd-cancel">${tu('cancel')}</button><button class="btn btn-primary hidden" id="upd-retry">${tu('retry')}</button><button class="btn btn-primary hidden" id="upd-apply">${ico('rocket')}${tu('restart')}</button></div>
+    <div class="form-row upd-status"><span class="small" id="upd-msg"></span><progress id="upd-prog" class="hidden" max="100" value="0"></progress></div>
+    <div class="form-row"><span id="upd-last" class="small hidden"></span></div>
     <div id="upd-notes" class="upd-notes hidden"></div>
+    <p class="small" style="color:var(--fg-3);margin:4px 0 10px;line-height:1.55">${esc(tu('howItWorks'))}</p>
     ${row(tu('cloud'), `<span class="cloud-dot" id="cloud-dot2"></span><span id="cloud-state2">…</span>`)}
     ${c.app && c.app.repo ? row('GitHub', `<a href="https://github.com/${esc(c.app.repo)}" target="_blank" rel="noopener" class="small mono">github.com/${esc(c.app.repo)}</a> <span class="small">— ${ts('github')}</span>`) : ''}
   </div>
@@ -935,22 +993,14 @@ async function openSettings(page = 'general') {
   $$('#st-tabs button').forEach((b) => (b.onclick = () => { $$('#st-tabs button').forEach((x) => x.classList.toggle('active', x === b)); $$('.spage').forEach((x) => x.classList.toggle('active', x.dataset.p === b.dataset.p)); }));
   const segClick = (id, fn) => $$('#' + id + ' button').forEach((b) => (b.onclick = () => { $$('#' + id + ' button').forEach((x) => x.classList.toggle('active', x === b)); fn(b.dataset.v); }));
   const swClick = (id, fn) => { const s = $('#' + id); s.onclick = () => { const on = s.classList.toggle('on'); s.setAttribute('aria-checked', on); fn(on); }; };
-  // updates + cloud status
-  const paintUpd = (u) => {
-    if (!u) return;
-    const latest = $('#upd-latest'); if (latest) latest.innerHTML = `${tu('latest')}: <b>${esc(u.latest || '—')}</b>`;
-    const ch = $('#upd-channel'); if (ch) ch.textContent = `${u.channel || 'stable'} · ${u.repo || ''}`;
-    const msg = $('#upd-msg'); const dl = $('#upd-dl'); const ap = $('#upd-apply'); const notes = $('#upd-notes');
-    if (msg) msg.textContent = u.error ? `${tu('error')}: ${u.error}` : u.available ? tu('available')(u.latest) : tu('upToDate');
-    if (dl) dl.classList.toggle('hidden', !(u.available && u.asset && !u.download?.ready));
-    if (ap) ap.classList.toggle('hidden', !(u.download && u.download.ready));
-    if (notes) { notes.classList.toggle('hidden', !(u.available && u.notes)); if (u.available && u.notes) notes.innerHTML = md(u.notes); }
-    { const de = $('#cloud-dot2'), se = $('#cloud-state2'); if (de && se) { const g = u.vault || {}; de.className = 'cloud-dot ' + (g.ok ? 'on' : g.enabled ? 'off' : ''); se.textContent = !g.enabled ? tu('cloudOff') : g.ok ? `${tu('cloudOk')} · ${(g.aliases || []).length} ${ts('modelsN')}` : `${tu('cloudDown')}${g.error ? ' (' + g.error + ')' : ''}`; } }
-  };
-  api('/api/update').then(paintUpd).catch(() => {});
-  if ($('#upd-check')) $('#upd-check').onclick = async () => { $('#upd-msg').textContent = tu('checking'); paintUpd(await api('/api/update?force=1')); };
-  if ($('#upd-dl')) $('#upd-dl').onclick = async () => { $('#upd-msg').textContent = tu('downloading'); await api('/api/update/download', { method: 'POST' }); };
-  if ($('#upd-apply')) $('#upd-apply').onclick = async () => { const r = await api('/api/update/apply', { method: 'POST' }); if (r.error) toast(r.error, 'err'); else if (r.manual) toast(r.note || tu('manualNote'), 'ok'); };
+  // updates + cloud status — state shared with the banner (see updBanner / paintUpdSettings)
+  api('/api/update').then((u) => updBanner(u)).catch(() => {});
+  if ($('#upd-check')) $('#upd-check').onclick = async () => { $('#upd-msg').textContent = tu('checking'); const u = await api('/api/update?force=1'); updBanner(u); if (!u.available && !u.error) toast(tu('upToDate'), 'ok'); };
+  if ($('#upd-dl')) $('#upd-dl').onclick = updActions.download;
+  if ($('#upd-cancel')) $('#upd-cancel').onclick = updActions.cancel;
+  if ($('#upd-retry')) $('#upd-retry').onclick = updActions.retry;
+  if ($('#upd-apply')) $('#upd-apply').onclick = updActions.apply;
+  if ($('#st-autodl')) swClick('st-autodl', (on) => api('/api/config', { method: 'POST', body: { autoDownload: on } }));
   if ($('#st-autoupd')) swClick('st-autoupd', (on) => api('/api/config', { method: 'POST', body: { autoUpdate: on } }));
   // general
   segClick('st-lang', async (v) => { await setLang(v); openSettings('general'); });
@@ -1067,7 +1117,7 @@ function showHelp(section) {
     ru: '<b>Модели</b>: встроенные модели работают сразу и переключаются, когда одна занята. Свой провайдер — в Настройки → Модели (любой OpenAI-совместимый или Anthropic endpoint; каталог знает 200+ провайдеров) — ключи остаются на этом компьютере.',
     zh: '<b>模型</b>：内置模型开箱即用，繁忙时自动轮换。在 设置 → 模型 添加自己的提供商（任何 OpenAI 兼容或 Anthropic 端点；目录收录 200+ 提供商）— 密钥只保存在本机。',
   });
-  const upd = T({ en: '<b>Updates</b>: the app checks GitHub releases on start and shows a banner when a new version exists. On Windows it downloads, verifies the SHA-256 and swaps itself in place; on macOS and Linux it downloads the package and opens the folder for you.', fa: '<b>به‌روزرسانی</b>: برنامه هنگام شروع نسخه‌های GitHub را بررسی می‌کند و برای نسخهٔ جدید بنر نشان می‌دهد. روی ویندوز دانلود می‌کند، SHA-256 را تأیید و خودش را جایگزین می‌کند؛ روی مک و لینوکس بسته را دانلود می‌کند و پوشه را برایتان باز می‌کند.', ru: '<b>Обновления</b>: при запуске проверяются релизы GitHub, при новой версии появляется баннер. На Windows пакет скачивается, проверяется SHA-256 и заменяется на месте; на macOS и Linux пакет скачивается и открывается папка.', zh: '<b>更新</b>：启动时检查 GitHub 发布，有新版本时显示横幅。Windows 上会下载、校验 SHA-256 并原地替换；macOS 和 Linux 上会下载安装包并为你打开文件夹。' });
+  const upd = T({ en: '<b>Updates</b>: ORCA checks the release channel on start and every few hours. A new version is downloaded in the background (resumable; mirrors when GitHub is blocked), verified against its SHA-256, and installed when you press <b>Restart & install</b> — Windows and Linux swap the app folder, macOS replaces the app bundle, AppImages replace themselves. Nothing to download by hand, no GitHub visit; your chats, files and keys are untouched. Settings → Updates shows the state, the release notes and the switches.', fa: '<b>به‌روزرسانی</b>: ORCA هنگام شروع و هر چند ساعت کانال انتشار را بررسی می‌کند. نسخهٔ جدید در پس‌زمینه دانلود می‌شود (قابل ادامه؛ اگر GitHub مسدود باشد از آینه‌ها)، با SHA-256 تأیید می‌شود و با زدن <b>راه‌اندازی مجدد و نصب</b> نصب می‌شود — در ویندوز و لینوکس پوشهٔ برنامه جایگزین می‌شود، در مک بستهٔ برنامه، و AppImage خودش را جایگزین می‌کند. نه دانلود دستی، نه رفتن به GitHub؛ گفتگوها، فایل‌ها و کلیدها دست نمی‌خورند. تنظیمات → به‌روزرسانی وضعیت، تازه‌ها و کلیدها را نشان می‌دهد.', ru: '<b>Обновления</b>: ORCA проверяет канал релизов при запуске и каждые несколько часов. Новая версия скачивается в фоне (с докачкой; через зеркала, если GitHub заблокирован), проверяется по SHA-256 и устанавливается по нажатию <b>Перезапустить и установить</b> — Windows и Linux заменяют папку приложения, macOS — бандл, AppImage заменяет сам себя. Ничего не нужно скачивать вручную и заходить на GitHub; чаты, файлы и ключи не затрагиваются. Настройки → Обновления показывают состояние, список изменений и переключатели.', zh: '<b>更新</b>：ORCA 在启动时和每隔几小时检查发布渠道。新版本在后台下载（支持断点续传；GitHub 被屏蔽时走镜像），用 SHA-256 校验，按下<b>重启并安装</b>后安装 — Windows 和 Linux 替换应用文件夹，macOS 替换应用包，AppImage 自我替换。无需手动下载，无需访问 GitHub；对话、文件和密钥不受影响。设置 → 更新显示状态、更新内容和开关。' });
   const links = `<a class="btn" href="https://github.com/Nethyric/orca#readme" target="_blank" rel="noopener">${ico('external')} README</a> <a class="btn" href="https://github.com/Nethyric/orca/blob/main/docs/setup.md" target="_blank" rel="noopener">${ico('external')} ${T({ en: 'Setup guide', fa: 'راهنمای نصب', ru: 'Установка', zh: '安装指南' })}</a> <a class="btn" href="https://github.com/Nethyric/orca/blob/main/docs/api.md" target="_blank" rel="noopener">${ico('external')} API</a> <a class="btn" href="https://github.com/Nethyric/orca/issues" target="_blank" rel="noopener">${ico('external')} ${T({ en: 'Report a problem', fa: 'گزارش مشکل', ru: 'Сообщить о проблеме', zh: '报告问题' })}</a>`;
   const tabs = [['start', T({ en: 'Getting started', fa: 'شروع', ru: 'Начало', zh: '入门' })], ['modes', T({ en: 'Modes & autonomy', fa: 'حالت‌ها و خودمختاری', ru: 'Режимы', zh: '模式' })], ['cmds', T({ en: 'Commands & shortcuts', fa: 'دستورها و میان‌برها', ru: 'Команды', zh: '命令' })], ['about', T({ en: 'About', fa: 'درباره', ru: 'О программе', zh: '关于' })]];
   const cur = section || 'start';
@@ -1134,7 +1184,8 @@ document.addEventListener('click', (e) => { if (window.innerWidth > 1240) return
   connect();
   $('#input').focus();
   // update check (non-blocking): banner appears only when a newer release exists
-  setTimeout(async () => { try { const u = await api('/api/update'); if (u.available && S.cfg.autoUpdate !== false && S.cfg.dismissedUpdate !== u.latest) updBanner(u); } catch (_) {} }, 2500);
+  S.upd = { dismissed: S.cfg.dismissedUpdate || '' };
+  setTimeout(async () => { try { const u = await api('/api/update'); if (u.lastInstall) { if (u.lastInstall.ok) toast(tu('installedOk')(u.lastInstall.version), 'ok'); else toast(tu('installedFail')(u.lastInstall.version) + (u.lastInstall.note ? ' — ' + u.lastInstall.note : ''), 'err'); } if (u.available && S.cfg.autoUpdate !== false && (S.cfg.dismissedUpdate !== u.latest || (u.download && u.download.ready))) { if (u.download && u.download.ready) S.upd.dismissed = ''; updBanner(u); } else S.upd = { ...(S.upd || {}), ...u }; } catch (_) {} }, 2500);
 })();
 window.ORCA = Object.assign(window.ORCA || {}, { previewFile, setPreviewFull, showHelp, openSettings, PV });
 })();

@@ -45,9 +45,13 @@
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Banner says an update is available but download fails | GitHub blocked | Download the zip manually from the Releases page and replace the folder |
-| *Hash mismatch* when applying | Corrupt download | Delete the pending update from the data folder and retry |
-| No update banner although a newer release exists | Checked less than 6 h ago, or the banner was dismissed | Settings → Updates → *Check for updates* |
+| *Download failed* in the banner | `github.com` and all mirrors unreachable, or the connection dropped for >45 s | Press **Retry** — the download resumes where it stopped. Behind a strict proxy, use *Open download page* as a last resort |
+| *checksum mismatch — the file was discarded* | Corrupt or tampered download | Press **Retry**; the file is fetched again (mirrors are tried in a different order) |
+| *the downloaded package is damaged* when installing | The package changed on disk between download and install | Download again from the banner or Settings → Updates |
+| *Updated to …* never appears; app restarts on the old version | The app folder is not writable (Program Files without admin rights, read-only media) | Move the ORCA folder somewhere writable (e.g. `%LOCALAPPDATA%\Programs\ORCA`) or run the update as administrator once; Settings → Updates shows *The update could not be installed — the previous version was kept* |
+| Banner says an update is available but there is no button | No package for this OS/CPU in that release yet | *Open download page* lists all packages |
+| No update banner although a newer release exists | Checked less than 6 h ago, dismissed with *Later*, or automatic checks are off | Settings → Updates → *Check for updates* |
+| An `ORCA-Agent.old-<version>` folder next to the app | The helper could not delete it (antivirus lock) | Safe to delete; ORCA removes it on the next start |
 
 ## Logs and data
 

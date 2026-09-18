@@ -113,10 +113,30 @@ async function handleApi(req, res, url) {
     req.on('close', () => { clearInterval(ka); clients.delete(res); });
     return;
   }
-  if (p === '/api/update' && req.method === 'GET') return json(res, 200, { ...(await remote.checkForUpdates(q.get('force') === '1')), download: remote.downloadState(), vault: vault.status(), remote: remote.remote(), repo: remote.REPO, channel: remote.CHANNEL });
-  if (p === '/api/update/download' && req.method === 'POST') { remote.downloadUpdate((d) => broadcast({ event: 'update', data: { download: d } })).then((d) => broadcast({ event: 'update', data: { download: d, ready: d.ready, error: d.error } })); return json(res, 200, { ok: true }); }
-  if (p === '/api/update/apply' && req.method === 'POST') { try { const r = remote.applyUpdate(); if (r.restarting) setTimeout(() => process.exit(0), 800); return json(res, 200, r); } catch (e) { return json(res, 400, { error: e.message }); } }
-  if (p === '/api/update/simulate' && req.method === 'POST' && process.env.ORCA_DEV) { broadcast({ event: 'update', data: { available: true, latest: body.version || '9.9.9', url: 'https://github.com/' + remote.REPO + '/releases', notes: body.notes || '- test release', asset: { name: 'ORCA-Agent-9.9.9-win-x64.zip' }, mustUpdate: !!body.must } }); return json(res, 200, { ok: true }); }
+  if (p === '/api/update' && req.method === 'GET') return json(res, 200, { ...(await remote.checkForUpdates(q.get('force') === '1')), download: remote.downloadState(), install: remote.installState(), pending: !!remote.readPending(), lastInstall: remote.installResult(), vault: vault.status(), remote: remote.remote(), repo: remote.REPO, channel: remote.CHANNEL });
+  if (p === '/api/update/download' && req.method === 'POST') { const push = (d) => broadcast({ event: 'update', data: { download: d } }); remote.downloadUpdate(push).then(push).catch((e) => broadcast({ event: 'update', data: { download: { active: false, error: e.message, phase: 'error' } } })); return json(res, 200, { ok: true, download: remote.downloadState() }); }
+  if (p === '/api/update/cancel' && req.method === 'POST') return json(res, 200, { ok: true, download: remote.cancelDownload() });
+  if (p === '/api/update/apply' && req.method === 'POST') {
+    try {
+      const r = await remote.applyUpdate((st) => broadcast({ event: 'update', data: { install: st } }));
+      if (r.restarting) { broadcast({ event: 'update', data: { install: { active: false, phase: 'restarting' } } }); setTimeout(() => { try { tools.procs.killAll && tools.procs.killAll(); } catch (_) {} process.exit(0); }, 900); }
+      return json(res, 200, r);
+    } catch (e) { broadcast({ event: 'update', data: { install: { active: false, phase: 'error', error: e.message } } }); return json(res, 400, { error: e.message }); }
+  }
+  if (p === '/api/update/simulate' && req.method === 'POST' && process.env.ORCA_DEV) { // UI testing: fake states without a real release
+    const v = body.version || '9.9.9'; const base = { available: true, latest: v, version: remote.VERSION, kind: body.kind || 'win-portable', inApp: (body.kind || 'win-portable') !== 'dev', url: 'https://github.com/' + remote.REPO + '/releases', notes: body.notes || '### Added\n- test release', asset: { name: `ORCA-Agent-${v}-win-x64.zip`, size: 205000000 }, mustUpdate: !!body.must };
+    const st = body.state || 'available';
+    base.install = {}; base.download = {};
+    const data = st === 'downloading' ? { ...base, download: { active: true, pct: body.pct || 37, bytes: 76000000, total: 205000000, speed: 4200000, eta: 31, phase: 'download', mirror: !!body.mirror } }
+      : st === 'verify' ? { ...base, download: { active: true, pct: 100, bytes: 205000000, total: 205000000, phase: 'verify' } }
+      : st === 'ready' ? { ...base, download: { active: false, ready: true, pct: 100, verified: true, phase: 'ready' } }
+      : st === 'dlError' ? { ...base, download: { active: false, error: body.error || 'download HTTP 503', phase: 'error' } }
+      : st === 'installing' ? { ...base, download: { ready: true }, install: { active: true, phase: 'extract 42%' } }
+      : st === 'restarting' ? { ...base, download: { ready: true }, install: { active: false, phase: 'restarting' } }
+      : st === 'installError' ? { ...base, download: { ready: true }, install: { active: false, phase: 'error', error: body.error || 'package does not contain ORCA.exe' } }
+      : base;
+    broadcast({ event: 'update', data }); return json(res, 200, { ok: true, data });
+  }
   if (p === '/api/update/dismiss' && req.method === 'POST') { config.save({ dismissedUpdate: body.version || '' }); return json(res, 200, { ok: true }); }
   if (p === '/api/health') return json(res, 200, { ok: true, version: require('../package.json').version, builtin: vault.enabled(), vault: vault.status().ok, repo: remote.REPO, tools: tools.TOOL_NAMES, electron: !!process.versions.electron, bins: { ffmpeg: !!tools.extras.findBin('ffmpeg'), ytdlp: !!tools.extras.findBin('yt-dlp'), chrome: !!tools.extras.findChrome() }, vision: !!tools.extras.visionModel(), judge: judge.status() });
   if (p === '/api/judge/test' && req.method === 'POST') { const t0 = Date.now(); try { return json(res, 200, await judge.test(body)); } catch (e) { return json(res, 200, { ok: false, status: e.status, error: String(e.message || e).slice(0, 300), ms: Date.now() - t0 }); } }
@@ -369,12 +389,20 @@ function createServer() {
   });
 }
 
-let lastAnnounced = '';
+let lastAnnounced = ''; const autoTries = {};
 function startBackground() {
   const tick = async () => {
     try { await vault.refresh(); } catch (_) {}
     try { await remote.refreshRemote(); } catch (_) {}
-    try { const u = await remote.checkForUpdates(); /* internally cached for 6 h */ if (u.available && u.latest !== lastAnnounced) { lastAnnounced = u.latest; broadcast({ event: 'update', data: { available: true, latest: u.latest, notes: u.notes, url: u.url, mustUpdate: u.mustUpdate } }); } } catch (_) {}
+    try {
+      const u = await remote.checkForUpdates(); /* internally cached for 6 h */
+      if (u.available && u.latest !== lastAnnounced) { lastAnnounced = u.latest; broadcast({ event: 'update', data: { ...u, download: remote.downloadState() } }); }
+      const c = config.load(); const d = remote.downloadState();
+      if (u.available && u.asset && u.kind !== 'dev' && c.autoUpdate !== false && c.autoDownload !== false && c.dismissedUpdate !== u.latest && !d.active && !d.ready && (autoTries[u.latest] || 0) < 3) {
+        autoTries[u.latest] = (autoTries[u.latest] || 0) + 1; // quiet background download (up to 3 attempts per version); the user only confirms the restart
+        const push = (x) => broadcast({ event: 'update', data: { download: x } }); remote.downloadUpdate(push).then(push).catch(() => {});
+      }
+    } catch (_) {}
   };
   vault.refresh().catch(() => {}); // keys first — the first message must not wait for the update check
   setTimeout(tick, 4000); setInterval(tick, 15 * 60 * 1000).unref();

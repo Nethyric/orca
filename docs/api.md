@@ -140,7 +140,7 @@ A single `text/event-stream` carrying every run's events. Each message is `data:
 | `stopped` | `{}` | Stopped by the user |
 | `done` | `{}` | Lane finished (always last) |
 | `title` | `{ chatId, title }` | Auto-generated chat title (no `runId`) |
-| `update` | update state (see [Updates](#updates)) | Update check / download progress (no `runId`) |
+| `update` | update state (see [Updates](#updates)) | Update check, download progress (`download`), install progress (`install`) — no `runId` |
 | `proc` | `{ id, name, command, cwd, pid, status, code, signal, ports, startedAt, exitedAt, uptimeMs }` | A [background process](#background-processes) started, opened a port or ended (no `runId`) |
 
 Minimal client:
@@ -281,10 +281,11 @@ Every change is also pushed on the event stream as `proc`.
 
 | Method & path | Body / query | Response |
 |---|---|---|
-| `GET /api/update[?force=1]` | — | `{ available, version, latest, url, notes, asset: { name, url, size }, sums, minVersion, mustUpdate, error, checkedAt, download: { …progress }, vault, remote, repo, channel }` — `asset` is the release file for this OS and CPU (`win-x64.zip`, `mac-<arch>.zip`/`.dmg`, `linux-<arch>.AppImage`/`.tar.gz`) |
-| `POST /api/update/download` | — | `{ ok }` — progress arrives as `update` SSE events (`{ download: { percent, bytes, total, ready, error } }`) |
-| `POST /api/update/apply` | — | Windows and Linux AppImage: `{ restarting: true }` — swaps the verified package in place and exits so the app relaunches. macOS and Linux tar.gz: `{ manual: true, zip, note }` — the verified package is revealed in the file manager. `400` with `error` if nothing is downloaded |
+| `GET /api/update[?force=1]` | — | `{ available, version, latest, url, notes, asset: { name, url, size, sha256 }, sums, kind, inApp, minVersion, mustUpdate, error, checkedAt, source, download: { active, pct, bytes, total, speed, eta, mirror, phase, ready, verified, error, path }, install: { active, phase, error }, pending, lastInstall, vault, remote, repo, channel }` — `asset` is the release file for this OS and CPU (`win-x64.zip`, `mac-<arch>.zip`/`.dmg`, `linux-<arch>.AppImage`/`.tar.gz`); `kind` is how this copy can be replaced (`win-portable`, `mac-app`, `linux-appimage`, `linux-dir`, `dev`); `notes` is the changelog section of the new version; `lastInstall` (`{ ok, version, from, note }`) is reported once after a restart that followed an install. Cached 6 h unless `force=1`. Falls back from the GitHub API to the release redirect + `SHA256SUMS` (also via mirrors) when the API is blocked or rate-limited |
+| `POST /api/update/download` | — | `{ ok, download }` — starts (or resumes) the download of `asset`; progress arrives as `update` SSE events (`{ download: { … } }`). Resumable with `Range`, tries public mirrors when `github.com` does not answer, verifies the SHA-256 (release digest or `SHA256SUMS`) and discards a mismatching file. Calling it again when the package is already downloaded returns the ready state |
+| `POST /api/update/cancel` | — | `{ ok, download }` — aborts the download; the partial file is kept for resume |
+| `POST /api/update/apply` | — | Packaged builds: `{ restarting: true }` — verifies the package again, extracts it (built-in zip/tar reader), launches a detached helper that swaps the app after exit (Windows folder, macOS `.app`, Linux folder/AppImage) and relaunches, then the server exits. Progress: `update` SSE events `{ install: { active, phase } }`. Source checkouts / web mode: `{ manual: true, zip, note }` — the verified package is revealed in the file manager. `400` with `error` if nothing is downloaded or the package is damaged |
 | `POST /api/update/dismiss` | `{ version }` | `{ ok }` |
-| `POST /api/update/simulate` | `{ version?, notes? }` | dev only (`ORCA_DEV=1`): broadcasts a fake update event |
+| `POST /api/update/simulate` | `{ state?, version?, notes?, kind?, pct?, mirror?, error?, must? }` | dev only (`ORCA_DEV=1`): broadcasts a fake update event; `state` ∈ `available` (default), `downloading`, `verify`, `ready`, `installing`, `restarting`, `dlError`, `installError` |
 
 Update checks call `https://api.github.com/repos/<repo>/releases/latest` (unauthenticated, 60 requests/hour per IP) at most once per 6 hours unless `force=1`.

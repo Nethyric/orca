@@ -43,7 +43,7 @@ const pkg = require('../package.json');
     'Web mode (optional, needs Node.js): npx @electron/asar extract resources\\app.asar app  then  node app\\src\\server.js  → http://localhost:7860',
     '',
     'Languages: English (default), فارسی, Русский, 中文 — click the language button in the title bar.',
-    'Updates: ORCA checks GitHub Releases and offers one-click updates (Settings → Updates).',
+    'Updates: ORCA updates itself — new versions are downloaded in the background, verified (SHA-256) and installed on restart (Settings → Updates).',
   ].join('\r\n'));
 
   const out = path.join(__dirname, '..', 'release', `ORCA-Agent-${pkg.version}-win-x64.zip`);
