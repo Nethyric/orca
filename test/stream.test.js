@@ -43,6 +43,19 @@ const expect = { nested: 'Paris.', nested2: 'Paris.', rloop: 'Paris.', loop: 'Th
       if (!ok) fail++;
       console.log(`${ok ? 'PASS' : 'FAIL'} [bigtool] finish=${r.finish} args=${tc?.function.arguments.length} salvaged=${sv.path} ${sv.content.length} chars in ${Date.now() - t0} ms`);
     }
+    { // stream dropped a few chars into a tool call → stall error (504) so the caller rotates keys/models
+      let err = null; const t0 = Date.now();
+      try { await streamOnce({ baseUrl: 'http://127.0.0.1:8791', apiKey: 'x', model: 'cuttool', maxTokens: 100 }, [{ role: 'user', content: 'hi' }], () => {}, undefined, true, 0.5, 5000); } catch (e) { err = e; }
+      const ok = err && err.status === 504 && Date.now() - t0 < 3000;
+      if (!ok) fail++;
+      console.log(`${ok ? 'PASS' : 'FAIL'} [cuttool] err=${err && err.message} status=${err && err.status} in ${Date.now() - t0} ms`);
+    }
+    { // token-cap cut inside a tool call keeps finish=length and the partial arguments (salvage path)
+      const r = await streamOnce({ baseUrl: 'http://127.0.0.1:8791', apiKey: 'x', model: 'lengthtool', maxTokens: 100 }, [{ role: 'user', content: 'hi' }], () => {}, undefined, true, 0.5, 5000);
+      const tc = r.tool_calls[0]; const ok = r.finish === 'length' && tc && tc.function.name === 'write_file' && tc.function.arguments.length > 1000;
+      if (!ok) fail++;
+      console.log(`${ok ? 'PASS' : 'FAIL'} [lengthtool] finish=${r.finish} args=${tc && tc.function.arguments.length}`);
+    }
     const joins = [
       ['Now tests.\n\n```javascript\nconst { app } =', '```javascript\nconst { app } = require(\'../server\');\n', 'Now tests.\n\n```javascript\nconst { app } = require(\'../server\');\n'],
       ['Start the server', ' with `node server.js`.', 'Start the server with `node server.js`.'],

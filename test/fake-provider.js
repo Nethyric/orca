@@ -20,6 +20,10 @@ const scenarios = {
   slownode: { chunks: ['The fast answer', ...Array.from({ length: 30 }, (_, i) => ` word${i}`), '.'], finish: 'stop', slowFirst: 400 },
   // a runaway write_file whose arguments never end (content first, no path) — the client must cut it and salvage
   bigtool: { tool: 'write_file', argChunks: ['{"content": "# Big Tutorial\\n\\n', ...Array.from({ length: 400 }, (_, i) => `Paragraph ${i} of the tutorial with enough words to make it long and realistic.\\n`)], finish: null, noDone: true },
+  // the gateway drops the stream ~90 characters into a tool call (seen live: edit_file cut after 91 chars, no finish_reason) — must surface as a stall (504), not as a "truncated" call
+  cuttool: { tool: 'edit_file', argChunks: ['{"path": "cafe/index.html", "old": "TODO: features section title", "new": "ویژگی'], finish: null, noDone: true, close: true },
+  // a legitimately long tool call that finishes at the token cap keeps its 'length' finish (salvage path)
+  lengthtool: { tool: 'write_file', argChunks: ['{"path": "notes.md", "content": "', ...Array.from({ length: 40 }, (_, i) => `line ${i} of a document that hits the cap\\n`)], finish: 'length', close: true },
 };
 const hits = {};
 http.createServer((req, res) => {
@@ -33,6 +37,7 @@ http.createServer((req, res) => {
       if (sc.tool) {
         if (i === 0) res.write(`data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_big', type: 'function', function: { name: sc.tool, arguments: '' } }] }, finish_reason: null }] })}\n\n`);
         if (i < sc.argChunks.length) { res.write(`data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: sc.argChunks[i++] } }] }, finish_reason: null }] })}\n\n`); setTimeout(tick, 5); return; }
+        if (sc.close) { if (sc.finish) res.write(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: sc.finish }], usage: { prompt_tokens: 10, completion_tokens: 20 } })}\n\n`); if (!sc.noDone) res.write('data: [DONE]\n\n'); res.end(); return; }
         return; // never finishes (proxy would cut it after minutes)
       }
       if (i < sc.chunks.length) { res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: sc.chunks[i++] }, finish_reason: null }] })}\n\n`); setTimeout(tick, gap); }
