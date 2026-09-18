@@ -47,8 +47,8 @@ Project-specific memory goes into `ORCA.md` at the workspace root (`/init` creat
 | Key | Description |
 |---|---|
 | `vision` | `{ provider, model, baseUrl, apiKey }` — `provider: ""` = auto (first provider with an image-capable model), `"<providerId>"`, or `"custom"` with `baseUrl` + `apiKey` |
-| `imageGen` | `{ provider, baseUrl, apiKey, model }` — `""` built-in free service, `"openai"` any `/images/generations` API, or `"<providerId>"` for a chat model with image output |
-| `videoGen` | `{ provider, apiKey, model }` — `""` key-frame animation, `"replicate"` prediction API, `"fal"` queue API |
+| `imageGen` | `{ provider, baseUrl, apiKey, model }` — `""` auto (a provider you added with an Images API, else built-in), `"builtin"` free service, `"openai"` any `/images/generations` API (base URL + key + model), or `"<providerId>"` (its Images API, or a chat model with image output) |
+| `videoGen` | `{ provider, baseUrl, apiKey, model }` — `""` auto (OpenAI provider → Sora, else key-frame animation), `"openai"` Videos API (Sora / compatible), `"replicate"` prediction API, `"fal"` queue API, or `"<providerId>"` |
 | `cookiesFile` / `cookiesBrowser` | For login-walled social downloads: path to a `cookies.txt` or a browser name (`chrome`, `firefox`, `edge`) |
 | `judge` | `{ enabled, apiKey, baseUrl, model }` — optional [decision engine](decision-engine.md) (System One API; default URL `https://api.typesafe.ai/v1`, model `jev-latest`). Env fallbacks `ORCA_JUDGE_KEY`, `TYPESAFE_API_KEY` |
 

@@ -282,7 +282,7 @@ Risk: `low`
 
 ### `ask_user`
 
-Pause and ask the user a clarifying question when the request is genuinely ambiguous. Provide 2-4 short options when possible. The run stops until they answer.
+Pause and ask the user one clarifying question with 2-4 short options. The run stops until they answer; the reply arrives as the next user message.
 
 Risk: `none`
 
@@ -290,6 +290,53 @@ Risk: `none`
 |---|---|---|
 | `question` * | string |  |
 | `options` | array of string |  |
+
+**Interrogation guard.** On a build request ("build a Telegram bot", "make me a site") a question is only allowed *after* work has been done. An `ask_user` — or a plain-text list of questions — sent before the first successful write/run is not shown to the user; the model gets a tool error telling it to pick sensible defaults and build first (once per run). A genuine blocker such as a bot token is asked for after the code exists. The guard is skipped for sub-agents, plan mode, long specifications (> 1500 characters) and replies to an earlier question.
+
+## Background processes
+
+Long-running programs — bots, dev servers, watchers, workers. `run_shell` kills anything that outlives its timeout; these survive across turns, keep a rolling 96 KB log, expose the TCP ports they open and can be stopped from the **Processes** panel (right side). They are killed when ORCA exits; nothing is restarted automatically.
+
+### `start_process`
+
+Start a program in the background and return immediately with an `id`. The same command in the same folder is not started twice (the running entry is returned instead). Limit: 12 running processes.
+
+Risk: `medium` (`high` when the command matches the dangerous-command list)
+
+| Parameter | Type | Description |
+|---|---|---|
+| `command` * | string |  |
+| `name` | string | Short label shown to the user, e.g. `Telegram bot` |
+| `cwd` | string | Workspace-relative folder (default: workspace root) |
+| `env` | object | Extra environment variables; secrets belong in a `.env` file when the program supports it |
+| `shell` | string: `auto` `cmd` `powershell` | Windows only |
+
+Returns `{ id, name, command, cwd, pid, status, ports, startedAt, note }`. Ports named in the command (`--port 3000`, `http.server 8000`) or printed in the output (`http://localhost:5173`) are probed and listed once they accept connections; the Processes panel shows them as links and the preview can open them.
+
+### `process_output`
+
+Latest log lines plus status. `wait_ms` (max 20 000) blocks until new output, an open port (`wait_for_port: true`) or exit — the normal way to check a freshly started server or bot without polling.
+
+Risk: `none`
+
+| Parameter | Type | Description |
+|---|---|---|
+| `id` * | string |  |
+| `tail` | integer | Lines, default 60 |
+| `wait_ms` | integer |  |
+| `wait_for_port` | boolean |  |
+
+Returns `{ …summary, log_tail, preview?: ["http://localhost:3000"], note? }` — `note` explains a crash (`exit code 1 — read the log, fix, start again`) or a silent process (buffered output).
+
+### `stop_process`
+
+Stops the whole process tree. Risk: `none`. `{ id }`
+
+### `list_processes`
+
+All processes of this session with status, uptime, ports. Risk: `none`.
+
+HTTP: `GET /api/procs`, `GET /api/procs/:id` (full log), `POST /api/procs/:id/stop`; SSE event `proc` on every status change.
 
 ### `remember`
 
@@ -323,22 +370,50 @@ Risk: `low`
 
 ### `scaffold_site`
 
-Generate a complete, responsive multi-page website skeleton in one call: `style.css` with design tokens (`:root` variables for colours, radii, shadow, font), `main.js` (mobile nav, active link, `toast()`, `loadData(name)`, a localStorage `cart`, `<form data-validate>` validation), one HTML + JS file per page with header/nav/hero/sections/footer already wired, `data/<name>.js` + `.json` content files and a README. Pages work from `file://` (no server needed). Page kinds are inferred from the title in English, Persian, Russian or Chinese (home, catalog/shop/menu, cart, contact/booking, about, dashboard) or set explicitly. Every placeholder is a `TODO` marker; the result lists how many remain per file. Persian/Arabic content switches the site to RTL with a matching font stack.
+Build a complete, modern multi-page website in one call — no build step, works from `file://` and any static host. The caller supplies the **real content per section**; the tool renders finished pages, so there are no `TODO` placeholders to chase afterwards.
+
+Generated files: `style.css` (design tokens in `:root`, dark/light themes with a toggle, responsive grid, RTL-aware, reveal animations), `main.js` (header/nav/footer rendered from `data/site.js`, inline SVG icon set, theme toggle, mobile menu, `toast()`, `loadData()`, `fmtPrice()`, localStorage cart, form validation, counters, back-to-top), one `<page>.html` + `<page>.js` per page, `data/site.js` (site name, page list, footer), `data/<items>.js|json` for catalogs, `README.md`.
 
 Risk: `low`
 
 | Parameter | Type | Description |
 |---|---|---|
 | `name` * | string | Site/brand name |
-| `pages` * | array | Ordered pages: `"Title"` or `{ title, file?, kind? }` with `kind` in `home` `catalog` `cart` `contact` `about` `dashboard` `generic` |
+| `pages` * | array | `"Title"` or `{ title, file?, kind?, description?, nav?, sections?, items?, records? }` |
 | `dir` | string | Target folder inside the workspace (default `.`) |
-| `tagline` | string | Used in the hero and meta description |
-| `lang` | string | Content language code (`en`, `fa`, `ru`, `zh`, …); `fa`/`ar` → `dir="rtl"` |
+| `tagline` | string | Hero fallback and meta description |
+| `lang` | string | `en`, `fa`, `ru`, `zh`, `ar` … — UI strings (buttons, form messages, footer) follow it; `fa`/`ar`/`he`/`ur` → `dir="rtl"` |
 | `theme` | string: `dark` `light` | Default `dark` |
-| `accent` | string: `indigo` `violet` `cyan` `emerald` `amber` `rose` `slate` | Accent colour |
-| `overwrite` | boolean | Overwrite existing files (default: existing files are skipped and listed) |
+| `accent` | string: `indigo` `violet` `cyan` `emerald` `amber` `rose` `slate` `gold` `teal` | Accent colour |
+| `currency` | string | Shown with numeric prices, e.g. `تومان`, `$`, `€` |
+| `logoText` | string | 1-2 letters for the logo mark |
+| `footer` | object | `{ about, address, phone, email, hours, social: [{ name, url }], note }` |
+| `overwrite` | boolean | Rewrite files that already exist (pages that come with `sections` are always rewritten) |
 
-Returns `{ dir, pages: [{ title, file, kind }], written, skipped, todo_markers, next }`.
+**Section types** (`pages[].sections[]`, each `{ type, … }`; `alt: true` tints the background, `id` adds an anchor):
+
+| `type` | Fields |
+|---|---|
+| `hero` | `badge`, `title` (wrap words in `**…**` for the gradient accent), `subtitle`, `primary {label, href}`, `secondary`, `trust []`, `image` or `icon` (split layout) |
+| `features` / `services` | `eyebrow`, `title`, `lead`, `items [{ icon | image, title, text, href }]` |
+| `stats` | `items [{ value, label }]` — numbers count up on scroll |
+| `steps` | `items [{ title, text }]` — numbered |
+| `catalog` / `menu` / `products` / `portfolio` / `courses` | `title`, `lead`, `items [{ name, category, price, description, emoji | image, href }]`, `cart: false` to hide the add buttons. Renders category chips, search, add-to-cart. Prices like `۱,۲۰۰,۰۰۰` or `1.200.000 تومان` are normalised to numbers |
+| `gallery` | `items [{ image, caption }]` |
+| `testimonials` | `items [{ name, role, quote, rating }]` |
+| `pricing` | `items [{ name, price, period, text, features [], featured, cta }]` |
+| `faq` | `items [{ q, a }]` |
+| `cta` | `title`, `text`, `primary` |
+| `about` / `text` | `title`, `paragraphs []`, `image` or `icon` (two-column) |
+| `team` | `items [{ name, role, bio }]` |
+| `contact` / `booking` / `order` | `title`, `lead`, `fields [{ name, label, type, required, minlength, options }]`, `info { address, phone, email, hours }`, `map` (embed URL), `submit`, `success` |
+| `cart` | shopping-cart page (quantities, total, checkout to localStorage) |
+| `dashboard` | `records []` → KPI cards + table |
+| `html` | `html` — raw block |
+
+A section without `type` is inferred from its shape (a `quote` → testimonials, `price` → catalog, `q`/`a` → FAQ …). Pages given only as titles receive sensible default sections in the site language. Calling the tool again with the same `dir` and a subset of pages rewrites just those pages and keeps navigation consistent across the site.
+
+Returns `{ dir, pages: [{ title, file, kind }], written, skipped, todo_markers, complete, next }` — `complete` is `true` when no `TODO` marker remains.
 
 ## Office documents
 
@@ -509,24 +584,33 @@ Risk: `low`
 
 ### `generate_image`
 
-Generate an image from a text prompt (free provider built in; OpenAI/Gemini-image if a key is set in Settings). Saves JPG/PNG into workspace generated/. Write prompts in English for best quality.
+Generate — or edit — an image from a text prompt. Provider resolution:
+
+1. **Settings → Agent → Image generation** when set: *Images API* (any OpenAI-compatible `/images/generations` — OpenAI `gpt-image-1`, a gateway with FLUX 2 / Seedream / Imagen / Ideogram / Recraft, Together, xAI, DeepInfra …), a provider from your list, or *Built-in*.
+2. *Auto* (default): the first provider you added whose base URL is a known image-capable gateway, otherwise the free built-in service.
+
+Editing (`image`, optional `mask`) needs an Images API provider. Authentication/billing errors from a provider you chose explicitly are reported, never silently swapped for the free service. Files are saved under `generated/` and the result states the provider and model that actually produced them.
 
 Risk: `low`
 
 | Parameter | Type | Description |
 |---|---|---|
-| `prompt` * | string |  |
-| `output` | string | e.g. generated/logo.png |
-| `width` | integer |  |
-| `height` | integer |  |
+| `prompt` * | string | English prompts give the best results |
+| `output` | string | e.g. `generated/logo.png` |
+| `width`, `height` | integer | Default 1024 × 1024 |
 | `seed` | integer |  |
-| `model` | string | flux (default) \| turbo \| gptimage … |
+| `model` | string | Provider model id (`flux-2-flash`, `gpt-image-1`, `seedream-v4` …); built-in: `flux` \| `turbo` |
 | `count` | integer | 1-4 |
 | `negative_prompt` | string |  |
+| `quality` | string | `low` \| `medium` \| `high` \| `auto` (Images API) |
+| `image` | string | Source image to edit (workspace path) |
+| `mask` | string | PNG mask for inpainting (transparent = edit here) |
+
+Returns `{ ok, provider, model, files: [{ path, bytes }], prompt, note? }`.
 
 ### `generate_video`
 
-Generate a short video from a text prompt (optionally from an image). With a Replicate or fal.ai key (Settings → Agent) it uses real text-to-video models; without a key it generates AI key-frames and animates them into an MP4 with ffmpeg. Output in workspace generated/.
+Generate a short video from a text prompt, optionally from a start image. With a provider configured in **Settings → Agent → Video generation** — **OpenAI Sora** through the Videos API (`POST /videos` → poll → `/videos/{id}/content`; any compatible base URL), **Replicate** (model predictions) or **fal.ai** (queue) — it produces real text-to-video. *Auto* uses an OpenAI provider from your list when present. Without any key ORCA generates AI key-frames and animates them into an MP4 with ffmpeg (Ken Burns + crossfade) and says so in `note`; the result always names the provider that produced the file.
 
 Risk: `low`
 
@@ -534,10 +618,12 @@ Risk: `low`
 |---|---|---|
 | `prompt` * | string |  |
 | `output` | string |  |
-| `duration` | number | seconds, default 5 |
+| `duration` | number | Seconds, default 5 (Sora: 4-20) |
 | `aspect_ratio` | string: `16:9` `9:16` `1:1` |  |
-| `image` | string | optional start image path |
-| `model` | string |  |
+| `image` | string | Optional start image path |
+| `model` | string | `sora-2` \| `sora-2-pro` \| a Replicate/fal model id |
+
+Returns `{ ok, provider, model, files: [{ path, bytes }], duration, note? }`; queued jobs return `{ pending: true, id }` when `wait` is false.
 
 ### `social_download`
 

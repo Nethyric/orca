@@ -166,6 +166,7 @@
         <button data-tab="changes"><svg><use href="#i-code"/></svg><span data-i18n="tabChanges">تغییرات</span><b class="badge hidden" id="chg-badge"></b></button>
         <button data-tab="preview"><svg><use href="#i-image"/></svg><span data-i18n="tabPreview">پیش‌نمایش</span></button>
         <button data-tab="notes"><svg><use href="#i-pin"/></svg><span data-i18n="tabNotes">Notes</span><b class="badge hidden" id="pin-badge"></b></button>
+        <button data-tab="procs"><svg><use href="#i-play"/></svg><span data-i18n="tabProcs">Processes</span><b class="badge hidden" id="proc-badge"></b></button>
       </div>
       <div class="panel-body scroll">
         <div id="tab-timeline" class="tab active"><div class="empty" data-i18n="emptyTimeline">ابزارهایی که ORCA اجرا می‌کند این‌جا ثبت می‌شوند.</div></div>
@@ -175,6 +176,7 @@
           <div class="notes-sec"><div class="notes-h"><svg><use href="#i-pin"/></svg><span data-i18n="pinnedMsgs">Pinned messages</span></div><div id="pins-list" class="pins"><div class="empty" data-i18n="noPins">Pin a message (📌 on hover) and it stays in the model's context no matter how long the chat gets.</div></div></div>
           <div class="notes-sec"><div class="notes-h"><svg><use href="#i-edit"/></svg><span data-i18n="chatNotes">Chat notes</span><span class="grow"></span><span class="small mono" id="notes-state"></span></div><textarea id="chat-notes" class="notes-ta" data-i18n-ph="notesPh" placeholder="Decisions, terminology, constraints for this chat — the model always sees these."></textarea></div>
         </div>
+        <div id="tab-procs" class="tab"><div class="tab-actions"><span class="small" id="procs-hint" data-i18n="procsHint">Bots and servers ORCA starts keep running here while the app is open.</span><span class="grow"></span><button class="ib sm" id="procs-refresh" data-tip="Refresh"><svg><use href="#i-refresh"/></svg></button></div><div id="procs-list"><div class="empty" data-i18n="noProcs">No background processes.</div></div></div>
         <div id="tab-preview" class="tab"><div class="tab-actions"><span id="preview-name" class="mono"></span><span class="grow"></span><span id="preview-actions"></span><button id="preview-save" class="btn sm primary hidden" data-i18n="save">ذخیره</button></div><div id="preview-body"></div></div>
       </div>
     </aside>

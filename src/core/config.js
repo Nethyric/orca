@@ -59,8 +59,8 @@ const DEFAULT_CONFIG = {
   webSearchEngine: 'auto',
   // 1.4: vision / generation / social
   vision: { provider: '', model: '', baseUrl: '', apiKey: '' },   // '' = auto (any user provider with an image-capable model) | <providerId> | 'custom' (baseUrl + apiKey + model)
-  imageGen: { provider: '', baseUrl: '', apiKey: '', model: '' },           // '' = free built-in provider | 'openai' (= any /images/generations API) | <providerId> (chat model with image output)
-  videoGen: { provider: '', apiKey: '', model: '' },                       // '' = animated key-frames | 'replicate' | 'fal'
+  imageGen: { provider: '', baseUrl: '', apiKey: '', model: '' },           // '' = auto (a gateway you added with an Images API, else free built-in) | 'builtin' | 'openai' (= any /images/generations API) | <providerId>
+  videoGen: { provider: '', baseUrl: '', apiKey: '', model: '' },          // '' = auto (OpenAI key → Sora, else animated key-frames) | 'openai' (Videos API) | 'replicate' | 'fal' | <providerId>
   // decision engine (System One judge — optional, bring your own key; see docs/decision-engine.md)
   judge: { enabled: true, apiKey: '', baseUrl: '', model: '' },
   cookiesFile: '',                                                          // cookies.txt for login-walled social content

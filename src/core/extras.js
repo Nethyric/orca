@@ -363,76 +363,186 @@ function makeTools({ safe, rel, WS }) {
   }
 
   // ================= GENERATION =================
-  async function generateImage({ prompt, output = '', width = 1024, height = 1024, seed, model = 'flux', count = 1, negative_prompt }) {
+  // Image/video generation. Provider resolution order: explicit Settings → any user provider whose base URL is a
+  // known media-capable gateway → free built-in service. Every path saves real files under generated/ and
+  // reports which provider/model produced them, so the agent never claims more than what happened.
+  const GEN_UA = UA;
+  const authHeaders = (key, extra = {}) => ({ authorization: 'Bearer ' + key, 'content-type': 'application/json', 'user-agent': GEN_UA, ...extra });
+  const IMAGE_MODEL_HINT = /(image|imagen|flux|sdxl|stable-diffusion|seedream|dall-e|gpt-image|nano-banana|ideogram|recraft|hidream|kolors|playground|cogview|z-image|riverflow|chroma|proteus|juggernaut|lucid|phoenix|hunyuan-image|grok-2-image|grok-imagine)/i;
+  const VIDEO_MODEL_HINT = /(sora|veo|kling|hailuo|minimax-video|wan|hunyuan-video|runway|gen-?[34]|luma|ray|pika|cogvideo|seedance|vidu|ltx|mochi|grok-imagine-video|video)/i;
+  const sizeFor = (w, h) => `${Math.max(256, Math.min(+w || 1024, 4096))}x${Math.max(256, Math.min(+h || 1024, 4096))}`;
+  const guessExt = (ct, url) => (/png/.test(ct || '') ? 'png' : /webp/.test(ct || '') ? 'webp' : /jpe?g/.test(ct || '') ? 'jpg' : ((url || '').match(/\.(png|jpe?g|webp)(\?|$)/i) || [])[1] || 'png').replace('jpeg', 'jpg');
+  // Which OpenAI-compatible endpoint should serve images: Settings → Image generation, else a user provider that is a
+  // known multi-model gateway (Routeway, OpenRouter, Together, fal, DeepInfra, xAI, OpenAI itself), else the built-in one.
+  function imageEndpoint(g, c) {
+    const pv = c.providers || {};
+    const pick = (id) => { const p = pv[id]; if (!p || !p.apiKey) return null; return { baseUrl: (g.baseUrl || p.baseUrl || '').replace(/\/+$/, ''), apiKey: g.apiKey || p.apiKey, via: id }; };
+    if (g.provider === 'openai') { if (g.apiKey || g.baseUrl) return { baseUrl: (g.baseUrl || 'https://api.openai.com/v1').replace(/\/+$/, ''), apiKey: g.apiKey || '', via: 'images-api' }; }
+    if (g.provider && g.provider !== 'openai' && g.provider !== 'builtin') { const e = pick(g.provider); if (e) return e; }
+    if (g.provider === '' || g.provider == null) { // auto: the first user gateway known to expose /images/generations
+      for (const [id, p] of Object.entries(pv)) if (p.apiKey && /routeway\.ai|openai\.com|together\.xyz|fal\.run|deepinfra\.com|x\.ai|openrouter\.ai|runware\.ai|fireworks\.ai/i.test(p.baseUrl || '')) { const e = pick(id); if (e) return e; }
+    }
+    return null;
+  }
+  const IMAGE_DEFAULT_MODEL = { 'api.openai.com': 'gpt-image-1', 'api.routeway.ai': 'flux-2-flash', 'api.together.xyz': 'black-forest-labs/FLUX.1-schnell', 'api.x.ai': 'grok-2-image', 'api.deepinfra.com': 'black-forest-labs/FLUX-1-schnell', 'openrouter.ai': 'google/gemini-2.5-flash-image-preview', 'api.fireworks.ai': 'accounts/fireworks/models/flux-1-schnell-fp8' };
+  const defaultImageModel = (base) => IMAGE_DEFAULT_MODEL[Object.keys(IMAGE_DEFAULT_MODEL).find((h) => base.includes(h)) || ''] || 'gpt-image-1';
+
+  async function saveImageData(d, f) {
+    if (d.b64_json) { fs.writeFileSync(f, Buffer.from(d.b64_json, 'base64')); return { bytes: fs.statSync(f).size }; }
+    if (d.url) { const m = String(d.url).match(/^data:image\/(\w+);base64,(.+)$/); if (m) { fs.writeFileSync(f, Buffer.from(m[2], 'base64')); return { bytes: fs.statSync(f).size }; } const r = await download(d.url, f, { timeoutMs: 180000 }); return { bytes: r.bytes, type: r.type }; }
+    throw new Error('image object has neither b64_json nor url');
+  }
+  // POST /images/generations (or /images/edits with a source image) against any OpenAI-compatible base URL.
+  async function imagesApi({ baseUrl, apiKey, model, prompt, n, size, quality, seed, negative_prompt, image, mask, outDir, base }) {
+    const files = [];
+    let r;
+    if (image) { // edit: multipart form (OpenAI + Routeway + Together all accept this shape)
+      const fd = new FormData();
+      const src = safe(image); if (!fs.existsSync(src)) return { error: 'image not found: ' + image };
+      fd.append('model', model); fd.append('prompt', prompt); fd.append('n', String(n)); if (size) fd.append('size', size);
+      fd.append('image', new Blob([fs.readFileSync(src)]), path.basename(src));
+      if (mask) { const mk = safe(mask); if (fs.existsSync(mk)) fd.append('mask', new Blob([fs.readFileSync(mk)]), path.basename(mk)); }
+      const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 240000);
+      try { const res = await fetch(baseUrl + '/images/edits', { method: 'POST', headers: { authorization: 'Bearer ' + apiKey, 'user-agent': GEN_UA }, body: fd, signal: ctl.signal }); const text = await res.text(); let json = null; try { json = JSON.parse(text); } catch (_) {} r = { status: res.status, json, text }; } finally { clearTimeout(t); }
+    } else {
+      const body = { model, prompt, n, size, response_format: 'b64_json' };
+      if (quality) body.quality = quality; if (seed != null) body.seed = +seed; if (negative_prompt) body.negative_prompt = negative_prompt;
+      if (/gpt-image|dall-e-3/i.test(model)) { delete body.seed; delete body.negative_prompt; } // OpenAI rejects unknown fields
+      if (/gpt-image/i.test(model)) delete body.response_format; // gpt-image always returns b64
+      r = await fetchJson(baseUrl + '/images/generations', { method: 'POST', headers: authHeaders(apiKey), body: JSON.stringify(body) }, 240000);
+      if (r.status === 400 && /response_format|unknown|unsupported|invalid/i.test(r.text)) { delete body.response_format; delete body.seed; delete body.negative_prompt; delete body.quality; r = await fetchJson(baseUrl + '/images/generations', { method: 'POST', headers: authHeaders(apiKey), body: JSON.stringify(body) }, 240000); }
+    }
+    if (r.status >= 400 || !r.json) return { error: `images API HTTP ${r.status}: ${r.text.slice(0, 300)}`, status: r.status };
+    const data = r.json.data || r.json.images || [];
+    if (!data.length) return { error: 'images API returned no images: ' + r.text.slice(0, 200) };
+    for (const [i, d] of data.entries()) {
+      const ext = d.b64_json ? 'png' : guessExt('', d.url);
+      const f = path.join(outDir, `${base}${data.length > 1 ? '-' + (i + 1) : ''}.${ext}`);
+      try { const sv = await saveImageData(d, f); files.push({ path: rel(f), bytes: sv.bytes, ...(d.revised_prompt ? { revised_prompt: d.revised_prompt } : {}) }); } catch (e) { return { error: 'could not save image: ' + e.message }; }
+    }
+    return { files, usage: r.json.usage || null };
+  }
+
+  async function generateImage({ prompt, output = '', width = 1024, height = 1024, seed, model, count = 1, negative_prompt, quality, image, mask, provider: providerOverride }) {
     if (!prompt) return { error: 'prompt is required' };
     count = Math.min(Math.max(+count || 1, 1), 4);
-    const c = config.load(); const g = c.imageGen || {};
+    const c = loadCfg(); const g = { ...(c.imageGen || {}) }; if (providerOverride) g.provider = providerOverride;
     const outDir = safe(output ? path.dirname(output) || 'generated' : 'generated'); fs.mkdirSync(outDir, { recursive: true });
     const base = output ? path.basename(output).replace(/\.[^.]+$/, '') : sanitize(prompt.slice(0, 40)) + '-' + Date.now().toString(36);
-    const files = [];
-    // Provider A: any OpenAI-compatible /images/generations (OpenAI, Together, fal proxy, OpenRouter image models via chat) if configured
-    if (g.provider === 'openai' && g.apiKey) {
-      const r = await fetchJson((g.baseUrl || 'https://api.openai.com/v1').replace(/\/+$/, '') + '/images/generations', { method: 'POST', headers: { authorization: 'Bearer ' + g.apiKey, 'content-type': 'application/json' }, body: JSON.stringify({ model: g.model || 'gpt-image-1', prompt, n: count, size: `${width}x${height}`, response_format: 'b64_json' }) }, 180000);
-      if (r.status >= 400 || !r.json) return { error: `image provider HTTP ${r.status}: ${r.text.slice(0, 300)}` };
-      for (const [i, d] of (r.json.data || []).entries()) { const f = path.join(outDir, `${base}${count > 1 ? '-' + (i + 1) : ''}.png`); if (d.b64_json) fs.writeFileSync(f, Buffer.from(d.b64_json, 'base64')); else if (d.url) await download(d.url, f); files.push({ path: rel(f), bytes: fs.statSync(f).size }); }
-      return { ok: true, provider: 'openai-compatible', model: g.model || 'gpt-image-1', files, prompt };
+    const wantExt = (output && (output.match(/\.(png|jpe?g|webp)$/i) || [])[1] || '').toLowerCase().replace('jpeg', 'jpg');
+    // Provider A: any OpenAI-compatible Images API (OpenAI, Routeway's 60+ image models, Together, xAI, DeepInfra …)
+    const ep = imageEndpoint(g, c);
+    if (ep && ep.baseUrl && g.provider !== 'builtin') {
+      const mdl = (model && IMAGE_MODEL_HINT.test(model) ? model : '') || g.model || defaultImageModel(ep.baseUrl);
+      const r = await imagesApi({ ...ep, model: mdl, prompt, n: count, size: sizeFor(width, height), quality, seed, negative_prompt, image, mask, outDir, base });
+      if (!r.error) return { ok: true, provider: ep.via === 'images-api' ? 'images-api' : ep.via, model: mdl, files: r.files, prompt, ...(r.usage ? { usage: r.usage } : {}) };
+      if (image) return r; // an edit cannot fall back to a text-only free service
+      if ((r.status === 401 || r.status === 402 || r.status === 403) && g.provider) return { ...r, hint: 'The configured image provider rejected the key or has no credit (Settings → Agent → Image generation). Tell the user; do not silently switch providers.' };
+      // otherwise fall through to the chat-model / free paths, but tell the model what happened
+      var providerNote = `${ep.via}: ${r.error}`; var imgErrStatus = r.status;
     }
+    // Provider B: a chat-completions model that returns images in message.images (Gemini-image class, via OpenRouter etc.)
     const up = (c.providers || {})[g.provider];
-    if (g.provider && g.provider !== 'openai' && (up || g.baseUrl)) {
-      // any chat-completions provider whose model returns images in message.images (e.g. Gemini-image class models)
+    const chatImage = async () => {
       const key = g.apiKey || (up && up.apiKey) || '';
-      const base = (g.baseUrl || (up && up.baseUrl) || '').replace(/\/+$/, '');
-      if (!base) return { error: 'image provider has no base URL' };
-      if (!g.model) return { error: 'set a model id for the image provider in Settings → Agent → Image generation' };
-      const r = await fetchJson(base + '/chat/completions', { method: 'POST', headers: { authorization: 'Bearer ' + key, 'content-type': 'application/json' }, body: JSON.stringify({ model: g.model, messages: [{ role: 'user', content: prompt }], modalities: ['image', 'text'] }) }, 180000);
+      const baseU = (g.baseUrl || (up && up.baseUrl) || '').replace(/\/+$/, '');
+      if (!baseU) return { error: 'image provider has no base URL' };
+      const r = await fetchJson(baseU + '/chat/completions', { method: 'POST', headers: authHeaders(key), body: JSON.stringify({ model: g.model, messages: [{ role: 'user', content: prompt }], modalities: ['image', 'text'] }) }, 180000);
       const imgs = r.json?.choices?.[0]?.message?.images || [];
       if (r.status >= 400 || !imgs.length) return { error: `image provider HTTP ${r.status}: ${r.text.slice(0, 300)}` };
+      const files = [];
       for (const [i, im] of imgs.entries()) { const url = im.image_url?.url || ''; const m = url.match(/^data:image\/(\w+);base64,(.+)$/); const f = path.join(outDir, `${base}${imgs.length > 1 ? '-' + (i + 1) : ''}.${m ? m[1].replace('jpeg', 'jpg') : 'png'}`); if (m) fs.writeFileSync(f, Buffer.from(m[2], 'base64')); else await download(url, f); files.push({ path: rel(f), bytes: fs.statSync(f).size }); }
       return { ok: true, provider: g.provider, model: g.model, files, prompt };
+    };
+    if (g.provider && !['openai', 'builtin'].includes(g.provider) && (up || g.baseUrl) && g.model && (!ep || (typeof imgErrStatus !== 'undefined' && [404, 405, 400].includes(imgErrStatus)))) {
+      const r = await chatImage(); if (r.ok || !ep) return r;
     }
-    // Provider B (default, free, no key): Pollinations
-    const errors = [];
+    if (image) return { error: 'Image editing needs an Images API provider (Settings → Agent → Image generation: OpenAI, Routeway, Together …). The built-in free service can only create images from text.' };
+    // Provider C (default, free, no key): Pollinations
+    const errors = []; const files = [];
+    const freeModel = model && !IMAGE_MODEL_HINT.test(model) ? model : 'flux';
     for (let i = 0; i < count; i++) {
       const s = seed != null ? +seed + i : Math.floor(Math.random() * 1e9);
-      const q = new URLSearchParams({ width: String(Math.min(+width || 1024, 2048)), height: String(Math.min(+height || 1024, 2048)), seed: String(s), nologo: 'true', model: model || 'flux', enhance: 'false', safe: 'false' });
+      const q = new URLSearchParams({ width: String(Math.min(+width || 1024, 2048)), height: String(Math.min(+height || 1024, 2048)), seed: String(s), nologo: 'true', model: freeModel, enhance: 'false', safe: 'false' });
       if (negative_prompt) q.set('negative_prompt', negative_prompt);
       const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt.slice(0, 1500))}?${q}`;
-      const wantExt = (output && (output.match(/\.(png|jpe?g|webp)$/i) || [])[1] || 'jpg').toLowerCase().replace('jpeg', 'jpg');
       let f = path.join(outDir, `${base}${count > 1 ? '-' + (i + 1) : ''}.jpg`);
       let ok = false;
-      for (let a = 0; a < 3 && !ok; a++) {
-        try { const r = await download(url, f, { timeoutMs: 120000 }); if (r.bytes > 3000 && /image/.test(r.type)) ok = true; else errors.push('bad response ' + r.type); } catch (e) { errors.push(e.message); await sleep(2000 * (a + 1)); }
+      for (let a = 0; a < 4 && !ok; a++) {
+        try { const r = await download(url, f, { timeoutMs: 120000 }); if (r.bytes > 3000 && /image/.test(r.type)) ok = true; else errors.push('bad response ' + r.type); }
+        catch (e) { errors.push(e.message); if (/HTTP 429/.test(e.message)) { if (a === 3) break; await sleep(8000 * (a + 1)); } else await sleep(2000 * (a + 1)); } // the free service throttles bursts: back off 8/16/24 s
       }
-      if (ok && wantExt !== 'jpg') { // honour the requested extension (provider always returns JPEG) — convert with ffmpeg when available
+      if (ok && i < count - 1) await sleep(1500); // pace multi-image requests
+      if (ok && wantExt && wantExt !== 'jpg') { // honour the requested extension (provider always returns JPEG) — convert with ffmpeg when available
         const ff = ffmpegBin(); const f2 = f.replace(/\.jpg$/, '.' + wantExt);
         if (ff) { const r = await run(ff, ['-y', '-loglevel', 'error', '-i', f, f2], { timeout: 60 }); if (r.code === 0 && fs.existsSync(f2)) { fs.unlinkSync(f); f = f2; } }
       }
-      if (ok) files.push({ path: rel(f), bytes: fs.statSync(f).size, seed: s, url });
+      if (ok) files.push({ path: rel(f), bytes: fs.statSync(f).size, seed: s });
     }
-    if (!files.length) return { error: 'image generation failed: ' + errors.slice(-3).join('; '), hint: 'Set an image provider key in Settings → Agent → Image generation, or retry.' };
-    return { ok: true, provider: 'pollinations', model: model || 'flux', files, prompt, note: 'free provider (no key). For OpenAI/gpt-image or Gemini-image quality add a key in Settings.' };
+    if (!files.length) return { error: 'image generation failed: ' + errors.slice(-3).join('; '), hint: /429/.test(errors.join()) ? 'The free built-in service is rate-limiting right now (too many requests in a short time). Wait a minute and retry, or add an Images API provider key in Settings → Agent → Image generation for unlimited use.' : 'Set an image provider key in Settings → Agent → Image generation, or retry.' };
+    return { ok: true, provider: 'pollinations', model: freeModel, files, prompt, note: (providerNote ? `configured provider failed (${providerNote}) — used the free built-in service instead. ` : '') + 'free provider (no key). For OpenAI/gpt-image, FLUX 2, Seedream, Imagen … add an Images API provider in Settings → Agent → Image generation.' };
   }
 
-  async function generateVideo({ prompt, output = '', duration = 5, aspect_ratio = '16:9', image, model, wait = true }) {
+  // ---- video: OpenAI-style async Videos API (POST /videos → poll → /content), Replicate, fal, or key-frame animation ----
+  async function videosApi({ baseUrl, apiKey, model, prompt, seconds, size, image, dest, wait }) {
+    let r;
+    if (image) {
+      const fd = new FormData(); fd.append('model', model); fd.append('prompt', prompt); fd.append('seconds', String(seconds)); fd.append('size', size);
+      const src = safe(image); if (!fs.existsSync(src)) return { error: 'image not found: ' + image };
+      fd.append('input_reference', new Blob([fs.readFileSync(src)]), path.basename(src));
+      const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 120000);
+      try { const res = await fetch(baseUrl + '/videos', { method: 'POST', headers: { authorization: 'Bearer ' + apiKey, 'user-agent': GEN_UA }, body: fd, signal: ctl.signal }); const text = await res.text(); let json = null; try { json = JSON.parse(text); } catch (_) {} r = { status: res.status, json, text }; } finally { clearTimeout(t); }
+    } else r = await fetchJson(baseUrl + '/videos', { method: 'POST', headers: authHeaders(apiKey), body: JSON.stringify({ model, prompt, seconds: String(seconds), size }) }, 120000);
+    if (r.status >= 400 || !r.json) return { error: `videos API HTTP ${r.status}: ${r.text.slice(0, 300)}`, status: r.status };
+    let job = r.json; const id = job.id; const t0 = Date.now();
+    while (wait && id && !['completed', 'failed', 'cancelled', 'canceled'].includes(job.status) && Date.now() - t0 < 20 * 60e3) { await sleep(6000); const s = await fetchJson(`${baseUrl}/videos/${id}`, { headers: authHeaders(apiKey) }, 30000); if (s.json) job = s.json; }
+    if (!wait && job.status !== 'completed') return { pending: true, id, status: job.status, note: 'video job queued; call generate_video again later or check the provider dashboard' };
+    if (job.status !== 'completed') return { error: 'video job ' + (job.status || 'unknown') + (job.error ? ': ' + JSON.stringify(job.error).slice(0, 200) : ''), id };
+    const r2 = await download(`${baseUrl}/videos/${id}/content`, dest, { headers: { authorization: 'Bearer ' + apiKey }, timeoutMs: 600000 });
+    return { id, bytes: r2.bytes, seconds: job.seconds || seconds, size: job.size || size };
+  }
+
+  async function generateVideo({ prompt, output = '', duration = 5, aspect_ratio = '16:9', image, model, wait = true, provider: providerOverride }) {
     if (!prompt) return { error: 'prompt is required' };
-    const c = config.load(); const g = c.videoGen || {};
+    const c = loadCfg(); const g = { ...(c.videoGen || {}) }; if (providerOverride) g.provider = providerOverride;
     const outDir = safe(output ? path.dirname(output) || 'generated' : 'generated'); fs.mkdirSync(outDir, { recursive: true });
     const base = output ? path.basename(output).replace(/\.[^.]+$/, '') : sanitize(prompt.slice(0, 40)) + '-' + Date.now().toString(36);
     const dest = path.join(outDir, base + '.mp4');
-    const provider = g.provider || '';
-    if (!provider || !g.apiKey) {
-      // No key: build a real video anyway — generate key frames with the free image provider and animate with ffmpeg (Ken Burns + crossfade).
+    let provider = g.provider || '';
+    const pv = c.providers || {};
+    // a user provider (added in Settings → Providers) can serve video when it exposes the OpenAI Videos API
+    let userEp = null;
+    if (provider && pv[provider]) userEp = { baseUrl: (g.baseUrl || pv[provider].baseUrl || '').replace(/\/+$/, ''), apiKey: g.apiKey || pv[provider].apiKey || '' };
+    if (provider === 'openai') userEp = { baseUrl: (g.baseUrl || 'https://api.openai.com/v1').replace(/\/+$/, ''), apiKey: g.apiKey || '' };
+    if (!provider && !g.apiKey) { // auto: OpenAI key present as a provider → Sora via the Videos API
+      const oa = Object.entries(pv).find(([, p]) => p.apiKey && /api\.openai\.com/.test(p.baseUrl || '')); if (oa) { userEp = { baseUrl: oa[1].baseUrl.replace(/\/+$/, ''), apiKey: oa[1].apiKey }; provider = 'openai'; }
+    }
+    if (userEp && userEp.baseUrl && userEp.apiKey) {
+      const mdl = model || g.model || 'sora-2';
+      const seconds = Math.max(4, Math.min(Math.round(+duration || 5), 20));
+      const size = aspect_ratio === '9:16' ? '720x1280' : aspect_ratio === '1:1' ? '1024x1024' : '1280x720';
+      const r = await videosApi({ ...userEp, model: mdl, prompt, seconds, size, image, dest, wait });
+      if (r.pending) return { ok: false, ...r, provider };
+      if (!r.error) return { ok: true, provider, model: mdl, files: [{ path: rel(dest), bytes: r.bytes }], duration: r.seconds, size: r.size };
+      if (r.status === 401 || r.status === 402 || r.status === 403) return { ...r, hint: 'The video provider rejected the key or has no credit (Settings → Agent → Video generation).' };
+      if (r.status !== 404) return r; // real failure on a real endpoint — report it, do not silently fake a video
+      var vNote = `${provider} has no /videos endpoint (HTTP 404) — `;
+    }
+    if (!provider || !g.apiKey || vNote) {
+      // No usable key: build a real video anyway — generate key frames with the image path and animate with ffmpeg (Ken Burns + crossfade).
       const ff = ffmpegBin(); if (!ff) return { error: 'ffmpeg missing' };
       const shots = Math.max(2, Math.min(6, Math.round((+duration || 5) / 2.5)));
       const [w, h] = aspect_ratio === '9:16' ? [720, 1280] : aspect_ratio === '1:1' ? [1024, 1024] : [1280, 720];
       const frames = [];
+      let frameErr = '';
       for (let i = 0; i < shots; i++) {
         const r = await generateImage({ prompt: `${prompt}, cinematic still frame ${i + 1} of ${shots}, consistent style`, output: path.posix.join(rel(outDir), `${base}-frame${i + 1}.jpg`), width: w, height: h, seed: 1000 + i });
-        if (r.ok) frames.push(safe(r.files[0].path));
+        if (r.ok) frames.push(safe(r.files[0].path)); else { frameErr = r.error || ''; if (/429/.test(frameErr) && !frames.length) break; }
+        if (i < shots - 1) await sleep(1200);
       }
-      if (frames.length < 2) return { error: 'could not generate key frames for the video' };
+      if (frames.length < 2) return { error: 'could not generate key frames for the video' + (frameErr ? ': ' + frameErr : ''), hint: /429/.test(frameErr) ? 'The free image service is rate-limiting; wait a minute and retry, or configure an image/video provider in Settings → Agent.' : undefined };
       const per = Math.max(2, (+duration || 5) / frames.length);
-      const fps = 25; const n = Math.round(per * fps);
+      const fps = 25;
       const inputs = frames.flatMap((f) => ['-loop', '1', '-framerate', String(fps), '-t', per.toFixed(2), '-i', f]); // exactly `per` seconds per still
       const zoom = frames.map((_, i) => `[${i}:v]scale=${w * 2}:${h * 2},zoompan=z='min(zoom+0.0012,1.25)':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${w}x${h}:fps=${fps},setsar=1,format=yuv420p[v${i}]`).join(';');
       let chain = ''; let last = 'v0'; let off = per - 0.7;
@@ -440,7 +550,7 @@ function makeTools({ safe, rel, WS }) {
       const filter = zoom + chain;
       const r = await run(ff, ['-y', '-hide_banner', '-loglevel', 'error', ...inputs, '-filter_complex', filter, '-map', '[vout]', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '21', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', dest], { timeout: 600 });
       if (r.code !== 0 || !fs.existsSync(dest)) return { error: 'ffmpeg failed: ' + r.out.slice(-400) };
-      return { ok: true, provider: 'orca-animated-stills', files: [{ path: rel(dest), bytes: fs.statSync(dest).size }], frames: frames.map(rel), duration: +duration || 5, note: 'No video-generation API key is configured, so ORCA generated AI key-frames and animated them (Ken Burns + crossfade). For true text-to-video (Runway/Kling/Veo/Luma via Replicate or fal.ai) add a key in Settings → Agent → Video generation.' };
+      return { ok: true, provider: 'orca-animated-stills', files: [{ path: rel(dest), bytes: fs.statSync(dest).size }], frames: frames.map(rel), duration: +duration || 5, note: (vNote || 'No video-generation API key is configured, so ') + 'ORCA generated AI key-frames and animated them (Ken Burns + crossfade). For true text-to-video add a provider in Settings → Agent → Video generation: OpenAI Sora (Videos API), Replicate or fal.ai.' };
     }
     // Provider: Replicate (any video model version) or fal.ai queue
     if (provider === 'replicate') {
@@ -468,7 +578,7 @@ function makeTools({ safe, rel, WS }) {
       await download(outUrl, dest, { timeoutMs: 600000 });
       return { ok: true, provider: 'fal', model: modelId, files: [{ path: rel(dest), bytes: fs.statSync(dest).size }] };
     }
-    return { error: `unknown video provider "${provider}" (use replicate | fal)` };
+    return { error: `unknown video provider "${provider}" (use openai | replicate | fal, or a provider id from Settings)` };
   }
 
   // ================= CODING-AGENT TOOLS =================
@@ -610,6 +720,12 @@ f.addEventListener('load',()=>{try{hook(f.contentWindow)}catch(e){errs.push('no 
     return { ok: true, path: rel(dest), ...a };
   }
 
+  // Temporarily override imageGen/videoGen for one call (Settings → Test) without persisting anything.
+  let GEN_OVERRIDE = null;
+  const cfgLoad = config.load.bind(config);
+  const loadCfg = () => { const c = cfgLoad(); return GEN_OVERRIDE ? { ...c, [GEN_OVERRIDE.key]: GEN_OVERRIDE.value } : c; };
+  async function withGenOverride(key, value, fn) { GEN_OVERRIDE = { key, value }; try { return await fn(); } finally { GEN_OVERRIDE = null; } }
+
   const impl = {
     async view_image({ path: p, question, ocr = true, languages }) {
       if (!p) return { error: 'path is required' };
@@ -635,15 +751,15 @@ f.addEventListener('load',()=>{try{hook(f.contentWindow)}catch(e){errs.push('no 
     async scaffold_site(args) { const r = require('./scaffold').scaffold({ ...args, root: WS() }); return { ...r, files: r.written.map((f) => (r.dir === '.' ? f : r.dir + '/' + f)) }; },
   };
   const SCHEMAS = [
-    { type: 'function', function: { name: 'scaffold_site', description: 'Generate a complete, responsive multi-page website skeleton in one call: style.css with design tokens, main.js (nav, active link, toast, JSON data loader, localStorage cart, form validation), one HTML + JS file per page (header/nav/hero/sections/footer already wired), data/*.json, README. Page kinds are inferred from names (home, catalog/shop/menu, cart, contact/booking, about, dashboard) or set explicitly. Use it FIRST for any site with 2+ pages, then replace every TODO marker with real content via edit_file, fill data/*.json, extend the page scripts, and browser_check each page. Offline, no dependencies.', parameters: { type: 'object', properties: { dir: { type: 'string', description: 'target folder inside the workspace (default ".")' }, name: { type: 'string', description: 'site/brand name' }, tagline: { type: 'string' }, lang: { type: 'string', description: 'content language code (en, fa, ru, zh, …); fa/ar → RTL' }, theme: { type: 'string', enum: ['dark', 'light'] }, accent: { type: 'string', enum: ['indigo', 'violet', 'cyan', 'emerald', 'amber', 'rose', 'slate'] }, pages: { type: 'array', description: 'ordered pages in the SITE LANGUAGE (titles appear in the navigation): "Title" or { title, file?, kind? } with kind in home|catalog|cart|contact|about|dashboard|generic', items: { anyOf: [{ type: 'string' }, { type: 'object', properties: { title: { type: 'string' }, file: { type: 'string' }, kind: { type: 'string' } }, required: ['title'] }] } }, overwrite: { type: 'boolean' } }, required: ['name', 'pages'] } } },
+    { type: 'function', function: { name: 'scaffold_site', description: 'Build a COMPLETE modern multi-page website in one call (no build step, works offline): style.css (design tokens, dark/light + toggle, responsive, RTL-aware), main.js (header/nav/footer from data/site.js, icons, cart, form validation, reveal animations, counters), one HTML+JS per page, data/*.js for catalog items, README. You supply the REAL CONTENT per section; the tool renders finished pages — no TODO placeholders. Section types: hero{badge,title (wrap key words in **…** for gradient accent),subtitle,primary{label,href},secondary,trust[],image,icon}, features/services{eyebrow,title,lead,items[{icon,title,text,image,href}]}, stats{items[{value,label}]}, steps{items[{title,text}]}, catalog/menu/products/portfolio{title,lead,items[{name,category,price,description,emoji|image,href}],cart:false to hide buttons}, gallery{items[{image,caption}]}, testimonials{items[{name,role,quote,rating}]}, pricing{items[{name,price,period,text,features[],featured,cta}]}, faq{items[{q,a}]}, cta{title,text,primary}, about/text{title,paragraphs[],image|icon}, team{items[{name,role,bio}]}, contact/booking/order{title,lead,fields[{name,label,type,required,options}],info,map,submit,success}, cart{}, dashboard{records[]}, html{html}. Add alt:true for a tinted section, id for anchors. Icons: coffee, utensils, leaf, bolt, shield, heart, star, award, users, globe, code, camera, music, book, gift, truck, cart, phone, mail, pin, clock, wifi, rocket, chart, cpu, calendar, scissors, dumbbell, car, map, lock, trend, sparkle. Pages given as plain titles get sensible default sections in the site language. Call again with the same dir and only some pages to rewrite them (overwrite:true) — nav/footer stay consistent. Then browser_check every page.', parameters: { type: 'object', properties: { dir: { type: 'string', description: 'folder for the site, e.g. cafe-site' }, name: { type: 'string' }, tagline: { type: 'string' }, lang: { type: 'string', description: 'en | fa | ru | zh | ar …' }, theme: { type: 'string', enum: ['dark', 'light'] }, accent: { type: 'string', enum: ['indigo', 'violet', 'cyan', 'emerald', 'amber', 'rose', 'slate', 'gold', 'teal'] }, currency: { type: 'string', description: 'e.g. تومان, $, €, ₽, ¥' }, logoText: { type: 'string', description: '1-2 letters for the logo mark' }, footer: { type: 'object', description: '{about, address, phone, email, hours, social:[{name:instagram|telegram|whatsapp|globe,url}], note}' }, pages: { type: 'array', items: { type: 'object', properties: { title: { type: 'string' }, file: { type: 'string', description: 'index.html for home; others e.g. menu.html' }, kind: { type: 'string', enum: ['home', 'catalog', 'cart', 'contact', 'about', 'dashboard', 'generic'] }, description: { type: 'string', description: 'meta description' }, nav: { type: 'boolean', description: 'false to hide from navigation' }, sections: { type: 'array', items: { type: 'object' } }, items: { type: 'array', items: { type: 'object' }, description: 'catalog items when the page is a catalog' }, records: { type: 'array', items: { type: 'object' } } }, required: ['title'] } }, overwrite: { type: 'boolean' } }, required: ['name', 'pages'] } } },
     { type: 'function', function: { name: 'ocr_image', description: 'Extract text from an image with the built-in OCR engine (no model needed). Languages: eng, fas, rus, chi_sim (default: English + the UI language). Use view_image instead when you also need a visual description.', parameters: { type: 'object', properties: { path: { type: 'string' }, languages: { type: 'array', items: { type: 'string' } } }, required: ['path'] } } },
     { type: 'function', function: { name: 'browser_check', description: 'Load a local HTML file (workspace path) or URL in headless Chrome and report runtime problems: uncaught exceptions, console.error/warn, unhandled promise rejections, broken images, plus page info (title, text excerpt, canvas count) and a screenshot. Optional `keys` (e.g. ["ArrowRight","ArrowRight"," "]) are pressed before the screenshot so games/apps advance. ALWAYS run this after building or changing a web page/app/game, fix every error, re-run until ok:true.', parameters: { type: 'object', properties: { url: { type: 'string', description: 'workspace path like site/index.html or an http(s) URL' }, keys: { type: 'array', items: { type: 'string' }, description: 'key names to press in order (KeyboardEvent.key values)' }, wait_ms: { type: 'number', description: 'time to let the page run before reporting (default 2500)' }, width: { type: 'number' }, height: { type: 'number' }, output: { type: 'string', description: 'screenshot path (default screenshots/check.png)' } }, required: ['url'] } } },
     { type: 'function', function: { name: 'view_image', description: 'Look at an image (workspace path, absolute path or URL): returns size/format, text read by OCR (English + Persian), and — when a vision model is configured — a full visual description. Use for screenshots, error images, UI mockups, photos the user attached (they are saved under attachments/).', parameters: { type: 'object', properties: { path: { type: 'string' }, question: { type: 'string', description: 'what to look for' }, ocr: { type: 'boolean' }, languages: { type: 'array', items: { type: 'string' }, description: 'tesseract langs, default ["eng","fas"]' } }, required: ['path'] } } },
     { type: 'function', function: { name: 'screenshot', description: 'Render a URL or local HTML file in headless Chrome/Edge, save a PNG and OCR it — verify web pages you built.', parameters: { type: 'object', properties: { url: { type: 'string' }, output: { type: 'string' }, width: { type: 'integer' }, height: { type: 'integer' }, full_page: { type: 'boolean' } }, required: ['url'] } } },
     { type: 'function', function: { name: 'social_download', description: 'Download videos/photos/audio from Instagram (posts, reels, profiles → latest posts), TikTok (no watermark, photo carousels + sound), X/Twitter (photos + videos), YouTube (videos, Shorts, playlists) and 1800+ other sites. Saves into workspace downloads/<platform>/. For login-walled content pass cookies (browser name or cookies.txt path).', parameters: { type: 'object', properties: { url: { type: 'string' }, output_dir: { type: 'string', description: 'default downloads' }, quality: { type: 'string', description: 'best | 1080 | 720 | small' }, audio_only: { type: 'boolean' }, no_watermark: { type: 'boolean' }, cookies: { type: 'string', description: '"chrome"|"firefox"|"edge" or path to cookies.txt' }, max_items: { type: 'integer', description: 'max items for playlists/profiles/carousels' } }, required: ['url'] } } },
     { type: 'function', function: { name: 'social_trending', description: 'Get what is trending right now: TikTok explore/For-You feed (public, by region) or TikTok search; YouTube trending or search; X/Twitter trends; Instagram latest posts of a username. Set download=true to also download the top items.', parameters: { type: 'object', properties: { platform: { type: 'string', enum: ['tiktok', 'youtube', 'x', 'instagram'] }, region: { type: 'string', description: 'US, GB, DE, IR, TR, … (X: country name)' }, count: { type: 'integer' }, query: { type: 'string', description: 'search keywords (tiktok/youtube) or username (instagram)' }, download: { type: 'boolean' }, max_download: { type: 'integer' }, output_dir: { type: 'string' } } } } },
-    { type: 'function', function: { name: 'generate_image', description: 'Generate an image from a text prompt (free provider built in; OpenAI/Gemini-image if a key is set in Settings). Saves JPG/PNG into workspace generated/. Write prompts in English for best quality.', parameters: { type: 'object', properties: { prompt: { type: 'string' }, output: { type: 'string', description: 'e.g. generated/logo.png' }, width: { type: 'integer' }, height: { type: 'integer' }, seed: { type: 'integer' }, model: { type: 'string', description: 'flux (default) | turbo | gptimage …' }, count: { type: 'integer', description: '1-4' }, negative_prompt: { type: 'string' } }, required: ['prompt'] } } },
-    { type: 'function', function: { name: 'generate_video', description: 'Generate a short video from a text prompt (optionally from an image). With a Replicate or fal.ai key (Settings → Agent) it uses real text-to-video models; without a key it generates AI key-frames and animates them into an MP4 with ffmpeg. Output in workspace generated/.', parameters: { type: 'object', properties: { prompt: { type: 'string' }, output: { type: 'string' }, duration: { type: 'number', description: 'seconds, default 5' }, aspect_ratio: { type: 'string', enum: ['16:9', '9:16', '1:1'] }, image: { type: 'string', description: 'optional start image path' }, model: { type: 'string' } }, required: ['prompt'] } } },
+    { type: 'function', function: { name: 'generate_image', description: 'Generate (or edit) an image from a text prompt. Uses the Images API provider from Settings → Agent → Image generation when one is configured (OpenAI gpt-image, Routeway: FLUX 2 / Seedream / Imagen / Ideogram / Recraft …, Together, xAI …), otherwise the free built-in service. Pass image= to edit an existing picture (Images API providers only). Saves into workspace generated/ and returns the real provider/model used. Write prompts in English for best quality.', parameters: { type: 'object', properties: { prompt: { type: 'string' }, output: { type: 'string', description: 'e.g. generated/logo.png' }, width: { type: 'integer' }, height: { type: 'integer' }, seed: { type: 'integer' }, model: { type: 'string', description: 'provider model id (flux-2-flash, gpt-image-1, seedream-v4 …); free service: flux | turbo' }, count: { type: 'integer', description: '1-4' }, negative_prompt: { type: 'string' }, quality: { type: 'string', description: 'low | medium | high | auto (Images API)' }, image: { type: 'string', description: 'workspace path of a source image to edit' }, mask: { type: 'string', description: 'optional PNG mask for inpainting (transparent = edit here)' } }, required: ['prompt'] } } },
+    { type: 'function', function: { name: 'generate_video', description: 'Generate a short video from a text prompt (optionally from a start image). With a provider configured in Settings → Agent → Video generation — OpenAI Sora (Videos API), Replicate or fal.ai — it produces real text-to-video; without a key it generates AI key-frames and animates them into an MP4 with ffmpeg and says so. Output in workspace generated/. The result reports which provider actually produced the file — never present the key-frame fallback as real AI video.', parameters: { type: 'object', properties: { prompt: { type: 'string' }, output: { type: 'string' }, duration: { type: 'number', description: 'seconds, default 5 (Sora: 4-20)' }, aspect_ratio: { type: 'string', enum: ['16:9', '9:16', '1:1'] }, image: { type: 'string', description: 'optional start image path' }, model: { type: 'string', description: 'sora-2 | sora-2-pro | a Replicate/fal model id' } }, required: ['prompt'] } } },
     { type: 'function', function: { name: 'glob', description: 'Find files by glob pattern (e.g. **/*.py, src/**/*.test.js), newest first.', parameters: { type: 'object', properties: { pattern: { type: 'string' }, path: { type: 'string' }, limit: { type: 'integer' } }, required: ['pattern'] } } },
     { type: 'function', function: { name: 'grep', description: 'Fast regex search across file contents with optional glob filter and context lines. Prefer this over run_shell grep.', parameters: { type: 'object', properties: { pattern: { type: 'string' }, path: { type: 'string' }, glob: { type: 'string' }, context: { type: 'integer' }, max_results: { type: 'integer' }, case_sensitive: { type: 'boolean' } }, required: ['pattern'] } } },
     { type: 'function', function: { name: 'todo_write', description: 'Create/update the visible task checklist for this job (shown live to the user). Call it at the start of multi-step work with all steps, then mark each step in_progress/done as you go. merge=true updates individual items.', parameters: { type: 'object', properties: { todos: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, text: { type: 'string' }, status: { type: 'string', enum: ['pending', 'in_progress', 'done', 'cancelled'] } }, required: ['text'] } }, merge: { type: 'boolean' } }, required: ['todos'] } } },
@@ -652,7 +768,7 @@ f.addEventListener('load',()=>{try{hook(f.contentWindow)}catch(e){errs.push('no 
     { type: 'function', function: { name: 'project_init', description: 'Create ORCA.md project memory in the workspace (like AGENTS.md/CLAUDE.md): scanned structure + sections for commands, conventions, decisions. Then fill it in with edit_file. It is loaded automatically in every future chat.', parameters: { type: 'object', properties: { overwrite: { type: 'boolean' } } } } },
     { type: 'function', function: { name: 'task', description: 'Delegate a self-contained sub-task to a sub-agent with its own fresh context (e.g. "research X and report", "explore the codebase and summarize the architecture", "write and test module Y"). It has the same tools and returns a final report. Use for parallelizable or context-heavy work; call several in one turn to run them in parallel.', parameters: { type: 'object', properties: { description: { type: 'string', description: '3-6 word label' }, prompt: { type: 'string', description: 'complete, self-contained instructions' }, model: { type: 'string' }, max_steps: { type: 'integer' } }, required: ['description', 'prompt'] } } },
   ];
-  return { impl, SCHEMAS, setCurrentChat, projectMemory, loadTodos, setSubagentRunner: (fn) => { runSubagent = fn; }, analyzeImage, describeWithVision, findBin, visionModel, findChrome };
+  return { impl, SCHEMAS, withGenOverride, setCurrentChat, projectMemory, loadTodos, setSubagentRunner: (fn) => { runSubagent = fn; }, analyzeImage, describeWithVision, findBin, visionModel, findChrome };
 }
 
 module.exports = { makeTools, findBin, UA };

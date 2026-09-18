@@ -99,8 +99,8 @@ ORCA_VAULT_KEY=... npm run dist:linux   # → release/ORCA-Agent-<version>-linux
 ### Release
 
 ```bash
-npm version 0.0.4 --no-git-tag-version   # or edit package.json
-git commit -am "0.0.4" && git tag v0.0.4 && git push && git push --tags
+npm version 0.0.5 --no-git-tag-version   # or edit package.json
+git commit -am "0.0.5" && git tag v0.0.5 && git push && git push --tags
 ```
 
 The **Release** workflow builds all three platforms in parallel (Windows on Ubuntu, macOS on `macos-14`, Linux on Ubuntu), merges one `SHA256SUMS`, attaches `remote/vault.json`, and publishes the GitHub Release. Installed apps pick it up on their next check.

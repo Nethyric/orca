@@ -4,6 +4,30 @@ All notable changes to ORCA are documented here. The format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.0.5] — 2026-09-18
+
+### Added
+- **Background processes.** New tools `start_process`, `process_output`, `stop_process`, `list_processes`: bots, dev servers, watchers and workers now keep running after the agent's turn ends (previously `run_shell` killed them at its timeout). Each process keeps a rolling log, its announced TCP ports are probed and shown as links, and the new **Processes** tab in the right panel lists them with status, uptime, log and a **Stop** button. Everything is killed when ORCA exits. Routes `GET /api/procs`, `GET /api/procs/:id`, `POST /api/procs/:id/stop`; SSE event `proc`.
+- **Build-first workflow for bots and services.** "Build a Telegram bot" now produces the complete project (handlers, `requirements.txt`/`package.json`, `.env.example`, `.gitignore`, README, syntax-checked) with sensible defaults, and only then asks for the one thing that is really needed — the token — with two options. When the token arrives it is written to `.env`, dependencies are installed, the bot is started as a background process and its first seconds of log are checked before the agent reports it live.
+- **Interrogation guard.** On a build request, an `ask_user` or a plain-text list of questions sent before any work has been done is not shown to the user; the model is told once to decide the defaults itself and build. A real blocker is still asked for after the code exists. Works with every model, no decision engine required.
+- **`scaffold_site` v2 — finished sites, not skeletons.** The model passes real content per section (hero, features, stats, steps, catalog/menu with items and prices, gallery, testimonials, pricing, FAQ, CTA, about/text, team, contact/booking forms, cart, dashboard) and gets back complete, modern pages: gradient hero with accent words, glass header, feature cards, animated counters, catalog with category chips + search + cart, validated forms, FAQ accordions, dark/light toggle, reveal-on-scroll, full RTL, per-language UI strings and fonts. Header, navigation and footer are rendered from `data/site.js`, so pages can be added or rewritten in later calls and navigation stays consistent. Section types are inferred when omitted; Persian/Arabic-digit prices are normalised for the cart. The result reports `complete: true` when no placeholder remains; the agent's build rule now requires it and a `browser_check` of every page.
+- **Image generation providers.** `generate_image` uses any OpenAI-compatible Images API — OpenAI `gpt-image-1`, gateways with FLUX 2 / Seedream / Imagen / Ideogram / Recraft, Together, xAI, DeepInfra … — including **image editing and inpainting** (`image`, `mask`) via `/images/edits`, `quality`, and a model datalist in Settings. *Auto* picks the first provider you added that is a known image-capable gateway, otherwise the free built-in service. Authentication/billing errors from an explicitly chosen provider are reported instead of silently falling back; the free service's rate limits are backed off properly.
+- **Video generation providers.** `generate_video` supports the **OpenAI Videos API (Sora 2 / Sora 2 Pro)** — create, poll, download, text-to-video and image-to-video, any compatible base URL — next to Replicate and fal.ai; *Auto* uses an OpenAI provider from your list when present. Without any key the key-frame animation fallback remains and is labelled as such.
+- **Test buttons** for image and video generation in Settings → Agent: generate one small sample with the values in the form (nothing is saved), show provider, model, latency and open the file. Route `POST /api/gen/test`.
+- **Decision engine add flow** (Settings → Models → Add provider → Decision engine): four-step how-to in the editor, *Add & activate* button that **verifies the key before saving** (an invalid key is reported inline, nothing is stored), then opens Settings → Agent with the switch on; honest status line (*paste your key first* / *key saved* / *active — checking every run*); filter, discover and manual-add controls are hidden in judge mode; the empty "Add" button in the manual model row now explains itself and Enter adds.
+- Model tiers in Settings → Models are translated (*strongest — reasoning & code*, *fastest*, *backup*, *sees images*) instead of showing raw keys.
+- Help center: a "Bots & servers" section in all four languages.
+
+### Changed
+- System prompt: build defaults and the bots/services workflow; the BIG PROJECTS rule now asks for real content first and one `scaffold_site` call, then verification of every page; "what can you do?" mentions background processes.
+- Bot/`telegram`/`discord` requests route to the strong model in auto mode.
+- `videoGen` gained `baseUrl`; `imageGen.provider` accepts `builtin` explicitly (`''` now means *auto*).
+
+### Fixed
+- Sites generated from title-only page lists no longer contain `TODO` placeholders; incremental `scaffold_site` calls keep the other pages' navigation.
+- Duplicate `id` on the manual-add row of the provider editor.
+
+
 ## [0.0.4] — 2026-09-18
 
 ### Added

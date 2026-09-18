@@ -28,6 +28,7 @@ const clients = new Set();
 process.on('uncaughtException', (e) => console.error('[uncaught]', e && e.stack || e));
 process.on('unhandledRejection', (e) => console.error('[unhandled]', e && e.stack || e));
 function broadcast(payload) { const s = `data: ${JSON.stringify(payload)}\n\n`; for (const c of clients) { try { c.write(s); } catch (_) {} } }
+tools.procs.setOnChange((pr) => broadcast({ event: 'proc', data: pr }));
 
 
 function startLane({ chatId, runId, lane, modelKey, history, planMode, autonomy, webMode, notes, pinned }) {
@@ -120,6 +121,22 @@ async function handleApi(req, res, url) {
   if (p === '/api/health') return json(res, 200, { ok: true, version: require('../package.json').version, builtin: vault.enabled(), vault: vault.status().ok, repo: remote.REPO, tools: tools.TOOL_NAMES, electron: !!process.versions.electron, bins: { ffmpeg: !!tools.extras.findBin('ffmpeg'), ytdlp: !!tools.extras.findBin('yt-dlp'), chrome: !!tools.extras.findChrome() }, vision: !!tools.extras.visionModel(), judge: judge.status() });
   if (p === '/api/judge/test' && req.method === 'POST') { const t0 = Date.now(); try { return json(res, 200, await judge.test(body)); } catch (e) { return json(res, 200, { ok: false, status: e.status, error: String(e.message || e).slice(0, 300), ms: Date.now() - t0 }); } }
   if (p === '/api/judge/status') return json(res, 200, judge.status());
+  // Settings → Agent → Image/Video generation → Test: generate one tiny sample with the values in the form (unsaved), report provider/model/file
+  if (p === '/api/gen/test' && req.method === 'POST') {
+    const kind = body.kind === 'video' ? 'video' : 'image'; const t0 = Date.now();
+    const key = kind === 'video' ? 'videoGen' : 'imageGen';
+    const cur = config.load()[key] || {};
+    const trial = { ...cur, provider: body.provider ?? cur.provider ?? '', model: body.model || cur.model || '', baseUrl: body.baseUrl || cur.baseUrl || '' }; if (body.apiKey) trial.apiKey = body.apiKey;
+    try {
+      const r = await tools.extras.withGenOverride(key, trial, () => tools.callTool(kind === 'video' ? 'generate_video' : 'generate_image', kind === 'video' ? { prompt: 'a paper boat drifting on a calm pond at sunrise, soft light', output: 'generated/test-video.mp4', duration: 4 } : { prompt: 'a small origami fox on a wooden desk, soft morning light, product photo', output: 'generated/test-image.png', width: 512, height: 512 }));
+      if (r && r.ok) return json(res, 200, { ok: true, provider: r.provider, model: r.model || '', file: r.files?.[0]?.path || '', ms: Date.now() - t0, note: r.note || '' });
+      return json(res, 200, { ok: false, error: (r && (r.error || r.note)) || 'failed', hint: r && r.hint, ms: Date.now() - t0 });
+    } catch (e) { return json(res, 200, { ok: false, error: e.message, ms: Date.now() - t0 }); }
+  }
+  // background processes started by the agent (bots, dev servers): list / log / stop
+  if (p === '/api/procs' && req.method === 'GET') return json(res, 200, { processes: await tools.procs.refreshAll() });
+  if (p.startsWith('/api/procs/') && p.endsWith('/stop') && req.method === 'POST') return json(res, 200, tools.procs.stop({ id: p.slice(11, -5) }));
+  if (p.startsWith('/api/procs/') && req.method === 'GET') { const pr = tools.procs.get(p.slice(11)); return pr ? json(res, 200, pr) : json(res, 404, { error: 'not found' }); }
   if (p === '/api/config' && req.method === 'GET') return json(res, 200, config.publicView());
   if (p === '/api/config' && req.method === 'POST') {
     const patch = { ...body };

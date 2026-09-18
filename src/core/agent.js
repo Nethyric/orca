@@ -55,7 +55,29 @@ const STR = {
 const L = () => STR[config.load().lang] || STR.en;
 
 // ---- auto router: fast model for light requests, strong model for real work ----
-const HEAVY = /(بساز|ایجاد کن|درست کن|پیاده|پروژه|کد|برنامه|اسکریپت|نصب|تحلیل|دیباگ|رفع|باگ|تست|فایل|پوشه|سایت|اپ\b|بازی|الگوریتم|بهینه|ریفکتور|دیتابیس|سرور|بنویس.*(کد|تابع|کلاس)|\bbuild\b|\bcreate\b|\bimplement\b|\bwrite (a |an |the )?(code|script|program|app|function|class|module)|\bfix\b|\bdebug\b|\brefactor\b|\binstall\b|\bdeploy\b|\banaly[sz]e\b|\bproject\b|\btest\b|\bfile\b|\bfolder\b|\bscript\b|\bapi\b|\bdatabase\b|\bwebsite\b|\bgame\b|\balgorithm\b|\boptimi[sz]e\b|\bmigrate\b|```)/i;
+const HEAVY = /(بساز|ایجاد کن|درست کن|پیاده|پروژه|کد|برنامه|اسکریپت|نصب|تحلیل|دیباگ|رفع|باگ|تست|فایل|پوشه|سایت|اپ\b|بازی|ربات|بات\b|\bbot\b|telegram|تلگرام|discord|الگوریتم|بهینه|ریفکتور|دیتابیس|سرور|بنویس.*(کد|تابع|کلاس)|\bbuild\b|\bcreate\b|\bimplement\b|\bwrite (a |an |the )?(code|script|program|app|function|class|module)|\bfix\b|\bdebug\b|\brefactor\b|\binstall\b|\bdeploy\b|\banaly[sz]e\b|\bproject\b|\btest\b|\bfile\b|\bfolder\b|\bscript\b|\bapi\b|\bdatabase\b|\bwebsite\b|\bgame\b|\balgorithm\b|\boptimi[sz]e\b|\bmigrate\b|```)/i;
+// The latest user message asks to build/create something (any supported language) — used by the interrogation guard.
+const BUILD_RE = /(بساز|ایجاد کن|درست کن|بنویس|پیاده.?سازی|راه.?انداز|\bbuild\b|\bcreate\b|\bmake\b|\bwrite\b|\bimplement\b|\bdevelop\b|\bgenerate\b|\bcode\b|созда|напиши|сдела|разработ|реализ|做一个|创建|写一个|开发|生成|实现)/i;
+// A reply that is mostly questions (≥2 question marks and no code/file list) — the classic "which stack? token? hosting?" stall.
+function looksLikeQuestionnaire(text) {
+  const t = String(text || '');
+  if (t.length > 2500 || /```/.test(t)) return false;
+  const qs = (t.match(/[?؟]/g) || []).length;
+  const lines = t.split('\n').filter((l) => l.trim());
+  const qLines = lines.filter((l) => /[?؟]\s*$/.test(l.trim())).length;
+  return qs >= 2 && (qLines >= 2 || qs / Math.max(1, lines.length) >= 0.4);
+}
+function isBuildRequest(msgs) {
+  let ui = -1; for (let i = msgs.length - 1; i >= 0; i--) if (msgs[i].role === 'user' && !/^\[system\]/.test(String(msgs[i].content || ''))) { ui = i; break; }
+  if (ui < 0) return false;
+  const lastUser = msgs[ui];
+  const text = typeof lastUser.content === 'string' ? lastUser.content : Array.isArray(lastUser.content) ? lastUser.content.map((p) => p.text || '').join(' ') : '';
+  if (!text || text.length > 1500) return false; // long specs may legitimately need a question
+  // an answer to a question the assistant asked EARLIER (bare token / choice) is not a fresh build request
+  const prevAssistant = msgs.slice(0, ui).reverse().find((m) => m.role === 'assistant');
+  if (prevAssistant && /\?|؟/.test(String(prevAssistant.content || '').replace(/<think>[\s\S]*?<\/think>/g, '').slice(-200)) && text.length < 120) return false;
+  return BUILD_RE.test(text);
+}
 function routeAuto({ text = '', history = [], planMode = false, hasFiles = false }) {
   const models = config.allModels().filter((m) => config.resolve(m.key)?.apiKey);
   const live = (m) => !vault.isVaultModel(m) || vault.liveCount(vault.aliasOf(m)) > 0;
@@ -138,7 +160,7 @@ function capabilityReport({ py, vision, modelLabel } = {}) {
     `media: ${has('ffmpeg') ? 'ffmpeg bundled → edit/convert/trim/concat/subtitles/gif' : 'ffmpeg missing'} · ${has('yt-dlp') ? 'yt-dlp bundled → social_download/social_trending' : 'yt-dlp missing'}`,
     `images: OCR (eng/fas/rus/chi_sim) · vision model ${vision ? 'ON (' + vision.model + ')' : 'OFF — images are read by OCR only'} · generate_image ${c.imageGen?.provider ? 'via ' + c.imageGen.provider : 'via free built-in provider'} · generate_video ${c.videoGen?.provider ? 'via ' + c.videoGen.provider : '(key-frame animation; add a Replicate/fal key for real T2V)'}`,
     `office: docx/xlsx/pptx write, docx/xlsx/pdf read`,
-    `agent: todo checklist, parallel sub-agents (task), long-term memory, ORCA.md project memory, plan mode, side-by-side & battle modes, ${c.maxSteps || 40} tool steps per run, output auto-continues past the per-turn limit`,
+    `agent: todo checklist, parallel sub-agents (task), long-term memory, ORCA.md project memory, plan mode, side-by-side & battle modes, ${c.maxSteps || 40} tool steps per run, output auto-continues past the per-turn limit · background processes (bots, dev servers) with live log + Stop in the Processes panel`,
     `decision engine: ${js.enabled ? 'ON (' + js.model + ') — request routing, command-risk review, answer verification, search re-ranking' : js.configured ? 'configured but disabled' : 'OFF (optional; Settings → Agent)'}`,
   ];
   capCache = { at: Date.now(), key: ck, text: lines.map((l) => '- ' + l).join('\n') };
@@ -167,13 +189,13 @@ PLAN MODE IS ON: do NOT modify anything. Investigate (read files, search) as nee
 IDENTITY (answer these from here, instantly, without tools): maker/company: ${APP.company || 'Nethyric'} · product: ORCA · version: ${APP_VERSION} · source code, releases and updates: ${APP.homepage || 'https://github.com/' + (APP.repo || 'Nethyric/orca')} · bug reports: https://github.com/${APP.repo || 'Nethyric/orca'}/issues · license: MIT · new versions are announced automatically inside the app.${model}
 NOW: ${nowString()}. Use this for anything time-related ("today", "this year", deadlines, ages, "latest"); your training data is older than this date, so verify recent facts with web_search.
 
-TOOLS (real, executed on this machine — never fake a result): shell (${process.platform === 'win32' ? 'cmd.exe by default; PowerShell auto-detected' : 'bash'}), run_node (always available), ${py ? 'run_python (' + py + ')' : 'NO Python — use run_node'}, files (read_file/write_file/edit_file/delete_file/list_files/glob/grep) in workspace "${ws}" (shell cwd; relative paths resolve there), diagnostics (syntax check), scaffold_site (complete multi-page website skeleton in one call), todo_write/todo_read (visible checklist), task (sub-agents with fresh context, run in parallel), web_search + fetch_page + http_request, VISION: view_image (OCR eng+fas${vision ? ' + vision model ' + vision.model : '; no vision model configured — text-only models, OCR is what you get'}), screenshot (headless Chrome), browser_check (headless Chrome: runtime errors + screenshot of any HTML/URL — use it instead of installing playwright/puppeteer), SOCIAL: social_download (Instagram/TikTok/X/YouTube/… videos, photos, carousels, profiles, playlists → downloads/), social_trending (TikTok explore feed & search, YouTube trending, X trends, Instagram user posts; download=true to fetch), GENERATE: generate_image (text→image, free provider built in), generate_video (text→video; real T2V with a Replicate/fal key, otherwise animated AI key-frames), OFFICE: write_docx/read_docx (Word), write_xlsx/read_xlsx (Excel, formulas, csv), write_pptx (designed PowerPoint decks), read_pdf, MEDIA (built-in ffmpeg, no install): media_info, media_edit (trim/convert/resize/compress/extract_audio/speed/gif/thumbnail/text watermark/crop/rotate/volume/fade), media_concat, media_from_images (slideshow), media_subtitles; remember/recall long-term memory, project_init (ORCA.md project memory), ask_user.
+TOOLS (real, executed on this machine — never fake a result): shell (${process.platform === 'win32' ? 'cmd.exe by default; PowerShell auto-detected' : 'bash'}), run_node (always available), ${py ? 'run_python (' + py + ')' : 'NO Python — use run_node'}, files (read_file/write_file/edit_file/delete_file/list_files/glob/grep) in workspace "${ws}" (shell cwd; relative paths resolve there), diagnostics (syntax check), scaffold_site (complete multi-page website skeleton in one call), todo_write/todo_read (visible checklist), task (sub-agents with fresh context, run in parallel), web_search + fetch_page + http_request, VISION: view_image (OCR eng+fas${vision ? ' + vision model ' + vision.model : '; no vision model configured — text-only models, OCR is what you get'}), screenshot (headless Chrome), browser_check (headless Chrome: runtime errors + screenshot of any HTML/URL — use it instead of installing playwright/puppeteer), SOCIAL: social_download (Instagram/TikTok/X/YouTube/… videos, photos, carousels, profiles, playlists → downloads/), social_trending (TikTok explore feed & search, YouTube trending, X trends, Instagram user posts; download=true to fetch), GENERATE: generate_image (text→image, free provider built in), generate_video (text→video; real T2V with a Replicate/fal key, otherwise animated AI key-frames), OFFICE: write_docx/read_docx (Word), write_xlsx/read_xlsx (Excel, formulas, csv), write_pptx (designed PowerPoint decks), read_pdf, MEDIA (built-in ffmpeg, no install): media_info, media_edit (trim/convert/resize/compress/extract_audio/speed/gif/thumbnail/text watermark/crop/rotate/volume/fade), media_concat, media_from_images (slideshow), media_subtitles; remember/recall long-term memory, project_init (ORCA.md project memory), ask_user (one question with 2-4 options — the run pauses), PROCESSES: start_process / process_output / stop_process / list_processes (bots, dev servers, workers that must keep running after your turn ends; they show up in the Processes panel with a Stop button).
 
 CAPABILITIES — verified on this machine right now (answer "what can you do / what are your features / can you X?" from THIS list, in the user's language: concrete, grouped, honest about what is OFF or missing and how to enable it, then 3-4 example requests tailored to the user's context. Never a vague "I can help with many things", never invent a capability that is not listed, never hide a limitation):
 ${caps}
 
 HOW TO WORK
-- Act first, ask only when a wrong guess would be costly. Never open with a questionnaire: pick sensible defaults, state them in one line, and start building; the user can redirect you. If the user answers a question with a bare choice/token/number, that IS the answer — continue immediately. Decompose big goals; call independent tools together in one turn (they run in parallel).
+- Act first, ask only when a wrong guess would be costly. Never open with a questionnaire (5 questions in a list = failure): pick sensible defaults, state them in one line, and start building; the user can redirect you. When ONE thing genuinely blocks the work (a bot token, an account, which of two very different products they mean), ask exactly that with ask_user and 2-4 concrete options — never as plain text — and build everything that does not depend on the answer FIRST, so the user comes back to finished code. If the user answers a question with a bare choice/token/number, that IS the answer — continue immediately. Decompose big goals; call independent tools together in one turn (they run in parallel).
 - Secrets the user pastes (API tokens, keys) go into a config file or .env, never hard-coded into source and never echoed back in full.
 - Build real things end-to-end: create files, run them, read errors, fix, re-run. Never stop at "you could…" when you can do it.
 - THINKING: for greetings, identity/date questions and other simple requests do not deliberate — answer directly (at most 2 short lines of thought). Think longer only for real problems. Never run a tool just to echo/print text you could simply write ("reply with X" → write X, no shell); a tool that already succeeded is not re-run "to verify".
@@ -192,8 +214,9 @@ HOW TO WORK
 - Multi-step jobs (3+ steps): first call todo_write with the full checklist, then keep statuses current (in_progress → done) as you work; the user watches it live. Big independent sub-problems → task sub-agents in parallel.
 - Images the user attaches are saved under attachments/ and pre-analyzed for you (OCR text${vision ? ' + vision description' : ''} appears inside <attached_image>). Use view_image on any image path/URL to inspect it (question= what to look for). Never claim you cannot see images without trying view_image first; if only OCR is available, say what the OCR read and what could not be determined.
 - Social media: for "download this link" use social_download directly (no research needed). For "trending/explore/popular videos" use social_trending (platform, region, query, download=true, max_download). Instagram Explore/stories/private content need the user's cookies — say so briefly and offer the alternatives instead of failing silently. Report every saved file path.
-- BIG PROJECTS (multi-page sites, shops, dashboards, full apps): do the whole thing, never a "starter". First todo_write the page/feature list, then scaffold_site (one call gives style.css with design tokens, main.js with nav/cart/forms/data loader, every page wired with header/nav/footer, data/*.json) and replace EVERY TODO marker with real content (edit_file; grep TODO to find the rest), extend the page scripts, write each file in ≤100-line chunks (append=true to continue), verify every page with browser_check, and finish with a short map: pages, files, how to run, what to extend next. Real content in the user's language (menus, products, texts) — never lorem ipsum. If the model output limit forces a pause, continue automatically until the list is done.
+- BIG PROJECTS (multi-page sites, shops, dashboards, full apps): do the whole thing, never a "starter" and never half a site. WEBSITES: write the real content first (site name, tagline, every page's sections with actual texts, items with prices, FAQ, testimonials, contact info — in the user's language, specific to their business, never lorem ipsum or "TODO"), then ONE scaffold_site call with all pages and sections (it renders finished, modern, responsive pages: hero with gradient accent, feature cards, stats, catalog with filters + cart, forms with validation, dark/light toggle, RTL). Check the result: complete must be true and todo_markers empty; if you need custom behaviour, edit the generated files (edit_file / write_file in ≤100-line chunks, append=true to continue). Then browser_check EVERY page (fix any error) and finish with a short map: pages, files, how to open, what to extend next. Custom apps/games that scaffold_site does not cover: write them fully, then browser_check. If the model output limit forces a pause, continue automatically until the list is done.
 - WEB APPS, SITES & GAMES: build them properly, not as demos. Structure: index.html + style.css + main.js (+ modules) unless the user asks for a single file. Include a real layout (header/nav/hero/sections/footer for sites; HUD, menu, pause, game-over, restart, best score for games), responsive CSS, keyboard + touch input, sensible defaults, no external CDNs (offline must work), no placeholder lorem ipsum. After writing, ALWAYS run browser_check on the entry HTML: it loads the page in headless Chrome, reports console errors/uncaught exceptions and takes a screenshot — fix every error and re-check before you answer. If browser_check is unavailable, run a quick node --check on the JS and a static sanity pass (matching braces, referenced ids exist). Tell the user the path and that they can open it from the Files tab.
+- BOTS & SERVICES (Telegram/Discord/WhatsApp bots, APIs, schedulers, scrapers that run continuously): NEVER ask what the bot should do, which language, or for the token before building. An unstated purpose is not a blocker: build a clean, extensible bot with /start, /help, a persistent menu keyboard and 2-3 genuinely useful sample features (e.g. FAQ answers, date/time, reminders, a small catalog) plus a handlers file where features go, and say in one line what you assumed. Build the complete project first with sensible defaults — Python if installed, otherwise Node (say which in one line): a real folder (bot.py or bot.js, handlers, requirements.txt/package.json, README with run + deploy steps, .env.example, .gitignore with .env), commands and messages in the user's language, error handling, logging, graceful shutdown. Read the token from the environment/.env ONLY — never hard-code it. THEN, and only then, ask for the token with ask_user (options like ["I'll paste the token", "How do I get one from @BotFather?"]) if the user has not given one — one question, after the code exists and was syntax-checked. When the token arrives: write it to .env (never echo it back in full), install dependencies (pip install -r requirements.txt / npm install), start the bot with start_process (never run_shell — it would be killed at the timeout), then process_output with wait_ms 6000 to confirm it is polling without errors (fix and restart if it crashed), and tell the user it is live: what to type to the bot, that it runs while ORCA is open, and that the Processes panel has the Stop button. Prefer long polling over webhooks (no public URL needed).
 - Final answer: concise Markdown in the user's language (default ${lang}); code, commands and paths in English. Write only the answer itself — never narrate your process ("The user asked…", "I'll answer concisely", "Let me…") and never restate the same answer twice. State what you did, results, file paths. Files you produced (images, videos, docs) → list their paths so the UI can preview them. No tool-output dumps unless asked.${effort}${plan}${web}${persona}${rules}${notes}${pins}${projectMemory()}${memorySnippet()}`;
 }
 
@@ -722,7 +745,7 @@ function toApiMessages(history) {
   return out;
 }
 
-const MUTATING_ALL = new Set(['write_file', 'edit_file', 'delete_file', 'run_shell', 'run_python', 'run_node', 'write_docx', 'write_xlsx', 'write_pptx', 'media_edit', 'media_concat', 'media_from_images', 'media_subtitles', 'social_download', 'generate_image', 'generate_video', 'project_init', 'scaffold_site', 'task']);
+const MUTATING_ALL = new Set(['write_file', 'edit_file', 'delete_file', 'run_shell', 'run_python', 'run_node', 'write_docx', 'write_xlsx', 'write_pptx', 'media_edit', 'media_concat', 'media_from_images', 'media_subtitles', 'social_download', 'generate_image', 'generate_video', 'project_init', 'scaffold_site', 'task', 'start_process', 'stop_process']);
 
 async function requestApproval(run, emit, call, risk) {
   emit('approval', { id: call.id, name: call.name, args: call.args, risk, ...(call.judged ? { judged: call.judged } : {}) });
@@ -756,6 +779,7 @@ async function runAgent(o) {
   if (o.lane !== 'sub') currentEmit = emit;
   const seen = new Map(); // loop detector: signature -> count of failures
   let nudges = 0, continuations = 0, carried = '';
+  let workDone = false, askBounced = false; // interrogation guard state (see ask_user handling)
   let stepCap = maxSteps, extensions = 0, progressAt = -1; // the cap stretches (twice, +50 %) while real work is still being done
 
   try {
@@ -817,6 +841,15 @@ async function runAgent(o) {
           continue;
         }
         const text = tidyAnswer(res.content, res.reasoning) || (res.reasoning ? res.reasoning.slice(-1200) : L().noAnswer);
+        // Plain-text questionnaire guard (no decision engine needed): a build request answered with a list of questions and
+        // zero work done → bounce once with the same instruction the ask_user guard uses. Works for every model.
+        if (o.lane !== 'sub' && !o.planMode && !workDone && !askBounced && step < maxSteps - 1 && isBuildRequest(msgs) && looksLikeQuestionnaire(text)) {
+          askBounced = true; carried = ''; emit('delta', { type: 'reset' });
+          msgs.push({ role: 'user', content: '[system] Your previous message was a list of questions and was NOT shown to the user, because nothing has been built yet. Do not ask what/which/whether: decide sensible defaults yourself (purpose, stack, features), state them in one line, and build the complete project now with tools. Only a required secret (e.g. a bot token) may be asked for — with ask_user, after the code exists.' });
+          api.push(msgs[msgs.length - 1]);
+          emit('status', { text: L().retry('questionnaire instead of work — building with defaults'), kind: 'retry' });
+          continue;
+        }
         // Decision engine (optional): a calibrated second opinion on the answer before the user sees it.
         // Garbled text → regenerate once; "I will now do X" with no X done → make it do X; the answer in the wrong
         // language → translate. Each nudge happens at most once per run and never for sub-agents or plan mode.
@@ -851,7 +884,19 @@ async function runAgent(o) {
         prepared.push({ id: tc.id, name, args, broken, partial: tc._partial });
       }
       const ask = prepared.find((c) => c.name === 'ask_user');
-      if (ask) {
+      if (ask && !workDone && !askBounced && o.lane !== 'sub' && isBuildRequest(msgs)) {
+        // Premature interrogation guard: on a build request nothing has been built yet, so a question is a stall — bounce it
+        // back once. Legit blockers (a token, credentials) come after the code exists, and that path is untouched.
+        askBounced = true;
+        const others = prepared.filter((c) => c !== ask);
+        const tm = { role: 'tool', tool_call_id: ask.id, name: 'ask_user', content: JSON.stringify({ error: 'Question NOT shown: nothing has been built yet. Do not ask what/which/whether — decide the sensible default yourself (purpose, stack, features), state it in one line, and build the complete project now. If a secret such as a bot token is required, build everything first, then ask for only that.', question_was: ask.args.question }) };
+        emit('tool_call', { id: ask.id, name: 'ask_user', args: ask.args, risk: 'none' });
+        emit('tool_result', { id: ask.id, name: 'ask_user', ok: false, ms: 0, result: tm.content });
+        msgs.push(tm); api.push(tm);
+        if (!others.length) continue; // let the model act
+        prepared.splice(prepared.indexOf(ask), 1);
+      }
+      if (ask && prepared.includes(ask)) {
         emit('question', { id: ask.id, question: ask.args.question, options: ask.args.options || [] });
         for (const c of prepared) { const tm = { role: 'tool', tool_call_id: c.id, name: c.name, content: JSON.stringify(c.id === ask.id ? { note: 'Question shown to user. Their reply will arrive as the next user message.' } : { error: 'skipped: waiting for the user to answer your question first' }) }; msgs.push(tm); api.push(tm); }
         emit('final', { text: res.content || ask.args.question, model: usedLabel, modelKey: res.used, usage: totalUsage, question: true });
@@ -875,7 +920,7 @@ async function runAgent(o) {
       }
       if (stopped()) { emit('stopped', {}); return { api, checkpoints, stopped: true }; }
       if (prepared.length > 1) emit('status', { text: L().running(prepared.length), kind: 'tools' });
-      const MUTATING = new Set(['write_file', 'edit_file', 'delete_file', 'run_shell', 'run_python', 'run_node', 'write_docx', 'write_xlsx', 'write_pptx', 'media_edit', 'media_concat', 'media_from_images', 'media_subtitles', 'project_init', 'scaffold_site']);
+      const MUTATING = new Set(['write_file', 'edit_file', 'delete_file', 'run_shell', 'run_python', 'run_node', 'write_docx', 'write_xlsx', 'write_pptx', 'media_edit', 'media_concat', 'media_from_images', 'media_subtitles', 'project_init', 'scaffold_site', 'start_process', 'stop_process']);
       const execOne = async (call) => {
         const decision = decisions.get(call.id);
         const t0 = Date.now();
@@ -913,6 +958,7 @@ async function runAgent(o) {
           }
         }
         else result = await tools.callTool(call.name, call.args);
+        if (MUTATING.has(call.name) && !(result && result.error)) workDone = true;
         let ck = null;
         if (result && result._diff) { ck = store.saveCheckpoint(chatId, runId, result._diff); if (ck) { checkpoints.push(ck); emit('checkpoint', { ...ck, before: result._diff.before, after: result._diff.after }); } delete result._diff; }
         if (result && result._todos) { emit('todos', { todos: result._todos }); delete result._todos; }

@@ -24,10 +24,23 @@ key put the engine on a short cooldown; nothing is retried in a loop.
 
 ## Setup
 
-**Settings → Agent → Decision engine**: paste the key, optionally change the base URL
-(default `https://api.typesafe.ai/v1`) and model (default `jev-latest`), press **Test**.
+Two equivalent entry points; both write the same `judge` record.
+
+1. **Settings → Models → Add provider → *Decision engine — System One (TypeSafe)***
+   (listed in its own group at the bottom of the provider picker). The editor switches to
+   judge mode: it explains what the engine is, shows the four setup steps, pre-fills base
+   URL and model, and hides the model picker's filter/discover/manual-add controls because
+   there is exactly one model (`jev-latest`). Paste the key and press **Add & activate**:
+   ORCA first *verifies* the key with a real request — an invalid key is reported inline
+   and nothing is saved — then stores it, enables the engine and opens
+   **Settings → Agent**, where the switch is on and the status reads *active*.
+   Re-opening the entry later shows *active — checking every run*.
+2. **Settings → Agent → Decision engine**: paste the key, optionally change the base URL
+   (default `https://api.typesafe.ai/v1`) and model (default `jev-latest`), press **Test**.
+
 The test sends one request (`rm -rf /` → destructive probability) and shows latency
-and the model version that answered.
+and the model version that answered. The engine is not a chat model: it never appears in
+the model list and cannot be selected for a conversation.
 
 Configuration record (`config.json`):
 

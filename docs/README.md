@@ -7,7 +7,7 @@ ORCA is a desktop AI agent. You describe a task; it plans, calls tools (shell, f
 | [Setup](setup.md) | Install a release, run from source, data & workspace folders, environment variables, building, maintainer workflows |
 | [Configuration](configuration.md) | Every key in `config.json`, autonomy levels, rules and persona, languages |
 | [Providers](providers.md) | Built-in models, adding your own providers and models, local models, testing keys |
-| [Tools](tools.md) | Reference for the 42 tools the agent can call |
+| [Tools](tools.md) | Reference for the 46 tools the agent can call |
 | [HTTP API](api.md) | Local REST + SSE API (what the UI uses; scriptable) |
 | [Vault](vault.md) | How built-in model keys are shipped, protected and rotated |
 | [Troubleshooting](troubleshooting.md) | Symptoms → causes → fixes |

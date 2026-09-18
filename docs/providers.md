@@ -83,11 +83,22 @@ Setting a provider to `null` in a `POST /api/config` patch deletes it.
 
 ## Vision, image and video generation
 
-*Settings → Agent* has three small sections that reuse your providers:
+*Settings → Agent* has three sections that reuse your providers. Each has a **Test** button that generates one tiny sample with the values in the form (nothing is saved until you press Save) and shows the provider, model, latency and the file.
 
-- **Vision model** — used to describe attached images and screenshots. *Auto* picks the first configured provider that has a model flagged `attachment`; or choose a provider (optionally a specific model id) or a custom endpoint.
-- **Image generation** — *Built-in (free)* works without a key. *Images API* targets any `/images/generations` endpoint (base URL + key + model). Choosing one of your providers uses a chat model that returns images (`modalities: ["image","text"]`).
-- **Video generation** — without a key ORCA generates AI key-frames and animates them with ffmpeg; with a Replicate-compatible prediction API or a fal-compatible queue API key it uses real text-to-video models.
+- **Vision model** — describes attached images and screenshots. *Auto* picks the first configured provider that has a model flagged `attachment`; or choose a provider (optionally a specific model id) or a custom endpoint. The built-in vision model works without a key.
+- **Image generation**
+  - *Auto* (default) — the first provider you added whose base URL is a known image-capable gateway (OpenAI, Routeway, Together, xAI, DeepInfra, OpenRouter, Fireworks, fal, Runware); otherwise the built-in free service.
+  - *Built-in (free)* — no key, text-to-image only.
+  - *Images API* — any OpenAI-compatible `/images/generations` + `/images/edits`: base URL, key, model. Examples: `https://api.openai.com/v1` + `gpt-image-1`; `https://api.routeway.ai/v1` + `flux-2-flash` / `seedream-v4` / `imagen-4` / `ideogram-v3-turbo` / `recraft-v4`; `https://api.together.xyz/v1` + `black-forest-labs/FLUX.1-schnell`; `https://api.x.ai/v1` + `grok-2-image`.
+  - *One of your providers* — uses its key and base URL; give a model id. If the provider has no Images API, a chat model that returns images (`modalities: ["image","text"]`, Gemini-image class) is used.
+  - Image *editing* requires an Images API provider. When the provider you selected rejects the key or has no credit, the tool reports it instead of quietly falling back.
+- **Video generation**
+  - *Auto* — an OpenAI provider in your list → Sora through the Videos API; otherwise AI key-frames animated with ffmpeg (clearly labelled as such).
+  - *Videos API (OpenAI Sora / compatible)* — base URL (default `https://api.openai.com/v1`), key, model `sora-2` or `sora-2-pro`; sizes 1280×720 / 720×1280 / 1024×1024, 4-20 s, optional start image.
+  - *Prediction API (Replicate)* — key + model such as `wan-video/wan-2.2-t2v-fast`.
+  - *Queue API (fal.ai)* — key + model such as `fal-ai/minimax/hailuo-02/standard/text-to-video` or `fal-ai/kling-video/v2.5-turbo/pro/text-to-video`.
+
+Configuration records: `imageGen { provider: '' | 'builtin' | 'openai' | <providerId>, baseUrl, apiKey, model }` and `videoGen { provider: '' | 'openai' | 'replicate' | 'fal' | <providerId>, baseUrl, apiKey, model }` in `config.json`; keys are masked in `GET /api/config` and kept when a POST omits them. `POST /api/gen/test { kind: 'image'|'video', provider, model, baseUrl, apiKey? }` runs the same test as the button.
 
 ## Testing and troubleshooting keys
 

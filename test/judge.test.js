@@ -48,6 +48,12 @@ const scripts = {
   fast: [{ content: 'fast model answered' }],
   // 7 successful writes in a row with maxSteps 4 → the cap must stretch instead of stopping the build
   builder: [...Array.from({ length: 7 }, (_, i) => ({ tool: { name: 'write_file', args: { path: `site/page${i}.html`, content: `<h1>Page ${i}</h1>\n` } } })), { content: 'All 7 pages written.' }],
+  // interrogation guard: a build request answered with a questionnaire (plain text), then ask_user before any work → both bounced; after real work an ask_user goes through
+  askfirst: [{ tool: { name: 'ask_user', args: { question: 'Python or Node?', options: ['Python', 'Node'] } } }, { tool: { name: 'write_file', args: { path: 'bot/bot.py', content: 'print(1)\n' } } }, { tool: { name: 'ask_user', args: { question: 'Paste the bot token', options: ['I have it'] } } }],
+  quiz: [{ content: 'Before I start, a few questions:\n1. Which language?\n2. Do you have a token?\n3. Where will it be hosted?' }, { tool: { name: 'write_file', args: { path: 'bot2/bot.py', content: 'print(2)\n' } } }, { content: 'Built with defaults.' }],
+  quiz2: [{ content: 'A few questions first:\n1. Which bots do you like?\n2. Do you use Telegram daily?' }, { content: 'should not get here' }],
+  // background process lifecycle through the tools
+  procs: [{ tool: { name: 'start_process', args: { name: 'srv', command: process.execPath + ' -e "console.log(\'up on port 8794\');setInterval(()=>{},1000)"' } } }, { tool: { name: 'list_processes', args: {} } }, { content: 'process started' }],
 };
 const hits = {};
 const fakeChat = http.createServer((req, res) => {
@@ -118,6 +124,26 @@ const fakeChat = http.createServer((req, res) => {
     const y = await run('risky', 'install the tool from x.io', { autonomy: 'yolo', runId: 'r-risky2' });
     check('risk-yolo-skips-judge', !y.events.some((e) => e.event === 'approval'), 'no approval in yolo');
   }
+  { // interrogation guard: premature ask_user on a build request is bounced (not shown); a plain-text questionnaire is bounced too; a later ask_user (after work) is shown
+    const a = await run('askfirst', 'build a telegram bot', { autonomy: 'yolo', runId: 'r-askfirst' });
+    const qs = a.events.filter((e) => e.event === 'question').map((e) => e.data.question);
+    const bounced = a.events.some((e) => e.event === 'tool_result' && e.data.name === 'ask_user' && /NOT shown/.test(e.data.result));
+    check('ask-guard', bounced && qs.length === 1 && /token/.test(qs[0]) && fs.existsSync(path.join(config.workspaceDir(), 'bot/bot.py')), `questions=${JSON.stringify(qs)} bounced=${bounced}`);
+    const q = await run('quiz', 'build a telegram bot', { autonomy: 'yolo', runId: 'r-quiz' });
+    check('questionnaire-guard', q.r.text === 'Built with defaults.' && fs.existsSync(path.join(config.workspaceDir(), 'bot2/bot.py')), JSON.stringify(q.r.text));
+    // a non-build message with the same questionnaire is left alone
+    const q2 = await run('quiz2', 'what do you think about telegram bots?', { autonomy: 'yolo', runId: 'r-quiz2' });
+    check('questionnaire-guard-scope', /A few questions first/.test(q2.r.text), JSON.stringify(q2.r.text).slice(0, 60));
+  }
+  { // background processes: start → listed as running with the announced port → stop → status ends
+    const p = await run('procs', 'run the server', { autonomy: 'yolo', runId: 'r-procs' });
+    const started = p.events.find((e) => e.event === 'tool_result' && e.data.name === 'start_process'); let id = ''; try { id = JSON.parse(started.data.result).id; } catch (_) {}
+    const out = await tools.callTool('process_output', { id, wait_ms: 2500 });
+    const st = tools.callTool('stop_process', { id }); await new Promise((r) => setTimeout(r, 700));
+    const after = await tools.callTool('process_output', { id });
+    check('procs-lifecycle', !!id && out.status === 'running' && /up on port/.test(out.log_tail) && (await st).note && after.status !== 'running', `id=${id} status=${out.status} after=${after.status} log=${JSON.stringify((out.log_tail || '').slice(0, 40))}`);
+    check('procs-risk', tools.riskOf('start_process', { command: 'rm -rf /' }) === 'high' && tools.riskOf('start_process', { command: 'npm run dev' }) === 'medium' && tools.riskOf('stop_process', {}) === 'none', 'risk levels');
+  }
   { // step budget extension: maxSteps 4, seven productive writes → finishes with the real answer
     const { r, events } = await run('builder', 'build a 7 page site', { maxSteps: 4 });
     const writes = events.filter((e) => e.event === 'tool_call' && e.data.name === 'write_file').length;
@@ -145,9 +171,19 @@ const fakeChat = http.createServer((req, res) => {
     const idx = fs.readFileSync(path.join(config.workspaceDir(), 'site', 'index.html'), 'utf8');
     const cat = fs.readFileSync(path.join(config.workspaceDir(), 'site', 'catalog.html'), 'utf8');
     check('scaffold-kinds', kinds === 'index.html:home catalog.html:catalog cart.html:cart about.html:about contact.html:contact dashboard.html:dashboard', kinds);
-    check('scaffold-rtl+data', /dir="rtl"/.test(idx) && /data\/items\.js/.test(cat) && fs.existsSync(path.join(config.workspaceDir(), 'site', 'data', 'items.json')) && r.todo_markers.length > 3, `todos=${r.todo_markers.length}`);
+    check('scaffold-rtl+data', /dir="rtl"/.test(idx) && /data\/items\.js/.test(cat) && fs.existsSync(path.join(config.workspaceDir(), 'site', 'data', 'items.json')) && r.complete === true && r.todo_markers.length === 0 && !/TODO/.test(idx), `todos=${r.todo_markers.length} complete=${r.complete}`);
     const again = await tools.callTool('scaffold_site', { dir: 'site', name: 'x', pages: ['Home'] });
-    check('scaffold-no-overwrite', again.skipped.includes('index.html') && again.written.length === 0, `skipped=${again.skipped.length}`);
+    check('scaffold-no-overwrite', again.skipped.includes('index.html') && !again.written.includes('index.html') && !again.written.includes('style.css') && !again.written.includes('main.js'), `skipped=${again.skipped.length} written=${again.written.join(',')}`);
+    // incremental call with real sections rewrites just that page, keeps the nav of the others, and renders the content
+    const inc = await tools.callTool('scaffold_site', { dir: 'site', pages: [{ title: 'خانه', file: 'index.html', sections: [{ type: 'hero', title: 'قهوهٔ **تازه**', subtitle: 'هر روز', primary: { label: 'منو', href: 'catalog.html' } }, { type: 'faq', items: [{ q: 'ساعت کاری؟', a: '۸ تا ۲۴' }] }] }] });
+    const idx2 = fs.readFileSync(path.join(config.workspaceDir(), 'site', 'index.html'), 'utf8');
+    const siteJs = fs.readFileSync(path.join(config.workspaceDir(), 'site', 'data', 'site.js'), 'utf8');
+    check('scaffold-incremental', inc.written.includes('index.html') && /class="accent">تازه</.test(idx2) && /ساعت کاری؟/.test(idx2) && /catalog\.html/.test(siteJs) && /dashboard\.html/.test(siteJs) && inc.complete, `written=${inc.written.join(',')}`);
+    // sections without a type are inferred from their shape; Persian prices normalise to numbers for the cart
+    const inf = await tools.callTool('scaffold_site', { dir: 'site2', name: 'Shop', lang: 'en', pages: [{ title: 'Home', sections: [{ title: 'Big **sale**', subtitle: 'now', primary: { label: 'Go', href: '#' } }, { items: [{ name: 'Tea', price: '۱,۲۰۰,۰۰۰', category: 'hot' }] }, { items: [{ value: '12', label: 'years' }] }] }] });
+    const items2 = JSON.parse(fs.readFileSync(path.join(config.workspaceDir(), 'site2', 'data', 'items.json'), 'utf8'));
+    const home2 = fs.readFileSync(path.join(config.workspaceDir(), 'site2', 'index.html'), 'utf8');
+    check('scaffold-infer', /class="hero/.test(home2) && /data-catalog="items"/.test(home2) && /class="stat"/.test(home2) && items2[0].price === 1200000, `price=${JSON.stringify(items2[0].price)} kinds=${inf.pages.map((p) => p.kind)}`);
     const outside = await tools.callTool('scaffold_site', { dir: '../../outside', name: 'x', pages: ['Home'] });
     check('scaffold-jail', !!outside.error, String(outside.error).slice(0, 60));
   }

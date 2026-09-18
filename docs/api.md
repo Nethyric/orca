@@ -21,6 +21,8 @@ All request and response bodies are JSON (`content-type: application/json`) unle
 - [Configuration](#configuration)
 - [Providers & models](#providers--models)
 - [Vault](#vault)
+- [Generation test](#generation-test)
+- [Background processes](#background-processes)
 - [Memory, todos & search](#memory-todos--search)
 - [Backup & stats](#backup--stats)
 - [Updates](#updates)
@@ -32,7 +34,7 @@ All request and response bodies are JSON (`content-type: application/json`) unle
 ### `GET /api/health`
 
 ```json
-{ "ok": true, "version": "0.0.4", "builtin": true, "vault": true, "repo": "Nethyric/orca",
+{ "ok": true, "version": "0.0.5", "builtin": true, "vault": true, "repo": "Nethyric/orca",
   "tools": ["run_shell", "…"], "electron": false,
   "bins": { "ffmpeg": true, "ytdlp": true, "chrome": true }, "vision": false,
   "judge": { "configured": false, "enabled": false, "model": "jev-latest", "cooling": false, "stats": { "calls": 0, "ok": 0, "failed": 0, "inputTokens": 0, "outputTokens": 0, "avgMs": 0, "lastError": "" } } }
@@ -139,6 +141,7 @@ A single `text/event-stream` carrying every run's events. Each message is `data:
 | `done` | `{}` | Lane finished (always last) |
 | `title` | `{ chatId, title }` | Auto-generated chat title (no `runId`) |
 | `update` | update state (see [Updates](#updates)) | Update check / download progress (no `runId`) |
+| `proc` | `{ id, name, command, cwd, pid, status, code, signal, ports, startedAt, exitedAt, uptimeMs }` | A [background process](#background-processes) started, opened a port or ended (no `runId`) |
 
 Minimal client:
 
@@ -193,7 +196,7 @@ Returns the public view of the configuration: everything in `config.json` with s
   "models": [ { "key": "auto", "label": "ORCA", "tier": "auto", "builtin": true },
               { "key": "minimax", "label": "MiniMax M2.7", "vendor": "MiniMax", "tier": "strong", "builtin": true, "ready": true },
               { "key": "groq/llama-3.3-70b-versatile", "label": "llama-3.3-70b-versatile", "vendor": "Groq", "builtin": false, "ready": true } ],
-  "builtin": true, "version": "0.0.4", "dataDir": "…", "workspaceDir": "…",
+  "builtin": true, "version": "0.0.5", "dataDir": "…", "workspaceDir": "…",
   "app": { "name": "ORCA", "company": "Nethyric", "repo": "Nethyric/orca", "homepage": "…" }
 }
 ```
@@ -236,6 +239,26 @@ Never returns key material. `refresh=1` forces a re-fetch. See [vault.md](vault.
 | `POST /api/judge/test` | `{ apiKey?, baseUrl?, model? }` (omitted values fall back to the stored config) | `{ ok, ms, model, sample }` or `{ ok: false, status, error }` |
 
 See [decision-engine.md](decision-engine.md).
+
+## Generation test
+
+| Route | Body | Result |
+|---|---|---|
+| `POST /api/gen/test` | `{ kind: "image" | "video", provider?, model?, baseUrl?, apiKey? }` — the values of the Settings form; omitted fields fall back to the stored `imageGen` / `videoGen` record, nothing is saved | `{ ok, provider, model, file, ms, note }` or `{ ok: false, error, hint?, ms }` |
+
+Generates one small sample (`generated/test-image.png` / `generated/test-video.mp4`) with the same code path the `generate_image` / `generate_video` tools use.
+
+## Background processes
+
+Processes started by the agent with `start_process` (bots, dev servers, workers). They live as long as the server does.
+
+| Route | Result |
+|---|---|
+| `GET /api/procs` | `{ processes: [ { id, name, command, cwd, pid, status: "running"|"exited"|"failed"|"stopped", code, signal, ports, startedAt, exitedAt, uptimeMs, logBytes } ] }` — ports are re-probed on every call |
+| `GET /api/procs/:id` | the same summary plus `log` (rolling, last 96 KB) |
+| `POST /api/procs/:id/stop` | sends SIGTERM to the process tree (SIGKILL after a grace period); `{ …summary, note }` |
+
+Every change is also pushed on the event stream as `proc`.
 
 ## Memory, todos & search
 

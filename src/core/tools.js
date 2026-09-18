@@ -382,7 +382,14 @@ const impl = {
     // Handled specially by the agent loop (pauses the run); this is a fallback.
     return { note: 'question delivered to user', question, options };
   },
+
+  // ---- background processes (bots, dev servers, workers): survive across turns, stoppable from the UI ----
+  async start_process({ name, command, cwd, env, shell }) { return procs.start({ name, command, cwd: cwd ? safe(cwd) : undefined, env, shell }); },
+  async process_output({ id, tail, wait_ms, wait_for_port }) { return procs.output({ id, tail, wait_ms, wait_for_port }); },
+  async stop_process({ id }) { return procs.stop({ id }); },
+  async list_processes() { return { processes: await procs.refreshAll() }; },
 };
+const procs = require('./procs').makeProcs({ spawn, spawnSpec, childEnv, killTree, WS, isWin });
 
 // Office & media tools (Word/Excel/PowerPoint/PDF + ffmpeg video/audio editing)
 const judge = require('./judge');
@@ -407,13 +414,18 @@ const SCHEMAS = [
   { type: 'function', function: { name: 'remember', description: 'Save a durable note about the user or project to long-term memory (persists across conversations). Use for preferences, facts, decisions.', parameters: { type: 'object', properties: { note: { type: 'string' } }, required: ['note'] } } },
   { type: 'function', function: { name: 'recall', description: 'Search long-term memory notes.', parameters: { type: 'object', properties: { query: { type: 'string' } } } } },
   { type: 'function', function: { name: 'ask_user', description: 'Pause and ask the user a clarifying question when the request is genuinely ambiguous. Provide 2-4 short options when possible. The run stops until they answer.', parameters: { type: 'object', properties: { question: { type: 'string' }, options: { type: 'array', items: { type: 'string' } } }, required: ['question'] } } },
+  { type: 'function', function: { name: 'start_process', description: 'Start a LONG-RUNNING program in the background and keep it alive across turns: Telegram/Discord bots, dev servers (npm run dev, python -m http.server, uvicorn, flask), watchers, workers. run_shell would kill it at its timeout — use this instead for anything that must keep running. Returns an id; then call process_output (wait_ms 3000-8000) to read its first log lines and confirm it stays up. Detected TCP ports appear as preview URLs and in the Processes panel; the user can stop it there. Not for one-shot commands.', parameters: { type: 'object', properties: { name: { type: 'string', description: 'short label shown to the user, e.g. "Telegram bot", "Dev server"' }, command: { type: 'string' }, cwd: { type: 'string', description: 'workspace-relative folder (default: workspace root)' }, env: { type: 'object', description: 'extra environment variables, e.g. {"PORT":"3000"} — put secrets in a .env file instead when the program supports it' }, shell: { type: 'string', enum: ['auto', 'cmd', 'powershell'], description: 'Windows only' } }, required: ['command'] } } },
+  { type: 'function', function: { name: 'process_output', description: 'Read the latest log lines of a background process (started with start_process) and its status/ports. wait_ms (max 20000) blocks until new output, an open port, or exit — use it right after starting something to catch crashes and confirm it is up.', parameters: { type: 'object', properties: { id: { type: 'string' }, tail: { type: 'integer', description: 'lines, default 60' }, wait_ms: { type: 'integer' }, wait_for_port: { type: 'boolean', description: 'wait until the process listens on a TCP port (dev servers)' } }, required: ['id'] } } },
+  { type: 'function', function: { name: 'stop_process', description: 'Stop a background process (whole process tree).', parameters: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] } } },
+  { type: 'function', function: { name: 'list_processes', description: 'List background processes started in this session with status, uptime and open ports.', parameters: { type: 'object', properties: {} } } },
 ];
 
 const DANGEROUS = /\b(rm\s+-rf|Remove-Item[^\n]*-Recurse|del\s+\/[sq]|rmdir\s+\/s|format\s+[a-z]:|mkfs|dd\s+if=|shutdown|reboot|Restart-Computer|Stop-Computer|:\(\)\s*\{|>\s*\/dev\/sd|diskpart|reg\s+delete|git\s+push\s+--force|git\s+reset\s+--hard|git\s+(checkout|restore)\s+(--\s+)?\.(\s|$)|git\s+clean\s+-\w*f|sudo\s+rm|chmod\s+-R\s+777\s+\/)/i;
 SCHEMAS.push(...office.SCHEMAS, ...extras.SCHEMAS);
 
 function riskOf(name, args) {
-  if (name === 'run_shell') return DANGEROUS.test(args.command || '') ? 'high' : 'medium';
+  if (name === 'run_shell' || name === 'start_process') return DANGEROUS.test(args.command || '') ? 'high' : 'medium';
+  if (name === 'stop_process' || name === 'process_output' || name === 'list_processes') return 'none';
   if (name === 'delete_file') return 'medium';
   if (name === 'run_python' || name === 'run_node') return 'low';
   if (name === 'write_file' || name === 'edit_file') return 'low';
@@ -428,4 +440,4 @@ async function callTool(name, args) {
   try { return await fn(args || {}); } catch (e) { return { error: `${e.name}: ${e.message}` }; }
 }
 
-module.exports = { callTool, SCHEMAS, riskOf, TOOL_NAMES: Object.keys(impl).filter((n) => !n.startsWith('_')), findPython, extras };
+module.exports = { callTool, SCHEMAS, riskOf, TOOL_NAMES: Object.keys(impl).filter((n) => !n.startsWith('_')), findPython, extras, procs };
