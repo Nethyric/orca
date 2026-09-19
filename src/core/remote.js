@@ -133,7 +133,10 @@ async function fetchLatestRelease() {
     return { tag: String(rel.tag_name), notes: String(rel.body || ''), url: rel.html_url, published: rel.published_at, source: 'api',
       assets: (rel.assets || []).map((a) => ({ name: a.name, url: a.browser_download_url, size: a.size, sha256: /^sha256:/.test(a.digest || '') ? a.digest.slice(7) : '' })) };
   }
-  const bases = [`https://github.com/${REPO}/releases/latest/download/`, ...MIRRORS.map((m) => m + `https://github.com/${REPO}/releases/latest/download/`)];
+  // Security: the checksum manifest used to *discover and vouch for* a release is only fetched
+  // from github.com itself. Mirrors stay usable for the (verified) bytes, but a mirror can never
+  // define what counts as a valid package. When GitHub is unreachable we refuse to guess.
+  const bases = [`https://github.com/${REPO}/releases/latest/download/`];
   for (const b of bases) {
     const sums = await fetchText(b + 'SHA256SUMS', 12000).catch(() => null);
     if (!sums) continue;
@@ -193,7 +196,10 @@ function readPending() { try { const p = JSON.parse(fs.readFileSync(pendingPath(
 function sha256File(file) { return new Promise((res, rej) => { const h = crypto.createHash('sha256'); fs.createReadStream(file).on('data', (c) => h.update(c)).on('end', () => res(h.digest('hex'))).on('error', rej); }); }
 async function expectedDigest(st) { // release asset digest (API) → SHA256SUMS line → none
   if (st.asset && st.asset.sha256) return st.asset.sha256.toLowerCase();
-  const urls = st.sums ? [st.sums, ...MIRRORS.map((m) => m + st.sums)] : [];
+  // Security: the checksum is only ever fetched from the official release source itself —
+  // NEVER from the unauthenticated public mirrors. A mirror can carry the bytes, but it must
+  // never be able to vouch for them; otherwise a mirror could substitute both file and hash.
+  const urls = st.sums ? [st.sums] : [];
   for (const u of urls) { const t = await fetchText(u, 10000).catch(() => null); if (!t) continue; const line = t.split('\n').find((l) => l.trim().endsWith(st.asset.name)); const m = line && line.match(/^([a-f0-9]{64})/i); if (m) return m[1].toLowerCase(); }
   return '';
 }
@@ -246,10 +252,12 @@ async function downloadUpdate(onProgress) {
     if (lastErr) throw lastErr;
     dl.phase = 'verify'; dl.pct = 100; report();
     const actual = await sha256File(dest);
-    if (digest && actual !== digest) { fs.rmSync(dest, { force: true }); throw new Error('checksum mismatch — the file was discarded, please download again'); }
-    if (!digest && st.asset.size && got !== st.asset.size) { fs.rmSync(dest, { force: true }); throw new Error('incomplete download — please try again'); }
-    dl = { ...dl, active: false, ready: true, path: dest, sha256: actual, phase: 'ready', verified: !!digest };
-    fs.writeFileSync(pendingPath(), JSON.stringify({ version: st.latest, zip: dest, sha256: actual, verified: !!digest, at: Date.now(), kind: installKind() }));
+    // Security: a package with NO trusted external checksum is never accepted. Without a digest
+    // there is nothing that proves these bytes are the release, so refuse rather than install.
+    if (!digest) { fs.rmSync(dest, { force: true }); throw new Error('no trusted checksum available for this release — update refused'); }
+    if (actual !== digest) { fs.rmSync(dest, { force: true }); throw new Error('checksum mismatch — the file was discarded, please download again'); }
+    dl = { ...dl, active: false, ready: true, path: dest, sha256: actual, phase: 'ready', verified: true };
+    fs.writeFileSync(pendingPath(), JSON.stringify({ version: st.latest, zip: dest, sha256: actual, verified: true, at: Date.now(), kind: installKind() }));
   } catch (e) { dl = { ...dl, active: false, error: e.message === 'cancelled' ? '' : e.message, phase: e.message === 'cancelled' ? 'cancelled' : 'error' }; if (e.message === 'cancelled') { /* keep the partial file for resume */ } }
   finally { dlAbort = null; report(); }
   return dl;

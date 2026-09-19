@@ -4,6 +4,20 @@ All notable changes to ORCA are documented here. The format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.0.8] — 2026-09-19
+
+### Security
+- **Isolated preview origin.** The Live Preview no longer runs agent-generated HTML on the app's own origin. Previews are served from a dedicated loopback port that exposes **only static workspace files** — no `/api`, no injected token, nothing else. A previewed page can therefore no longer read `window.__ORCA_TOKEN__` or call the local API (previously, a crafted page opened in the preview could take over the agent: write files, read all chats and config, plant memory). If the preview origin is unavailable, the UI falls back to a locked-down sandbox without `allow-same-origin`.
+- **No shell in the syntax check.** The post-write diagnostics ran `execSync` through a shell with the (model-controlled) file name interpolated — a filename like `x$(cmd).js` executed arbitrary commands, and `write_file` needs no confirmation in `auto` mode. The check now uses `execFileSync` with argument arrays (no shell).
+- **Updates require a trusted checksum.** A package for which no external SHA-256 could be obtained is now **refused outright** instead of being marked "ready (unverified)". `SHA256SUMS` is only fetched from the official release source — public mirrors may still carry the (verified) bytes, but can never define what counts as valid; release discovery via mirrors was removed for the same reason.
+- **Sub-agents can no longer bypass approvals.** The delegated `task` sub-agent previously ran at full autonomy regardless of the user's autonomy setting. High-risk calls inside a sub-agent are now denied outright (a sub-agent cannot ask the user), the decision engine's command-risk review applies to sub-agents as well, and starting a `task` in `auto` mode asks for one confirmation like `run_shell`.
+- **Stronger command-risk denylist.** Catches `rm -r -f` / `rm -fr` flag splits, `git push -f`, `find … -exec`, any `… | sh` pipe, and `base64 -d … | sh`, without flagging benign commands (`git push origin main`, `echo … | sha256sum`, …).
+- **pptx reader stays in the workspace.** `GET /api/workspace/office` for `.pptx` now validates the path against the workspace like every other read tool (it previously allowed `../../` traversal).
+- **Request bodies are size-capped** (50 MB) on the local API.
+
+### Added
+- `test/hardening.test.js` — regression tests for every fix above (filename injection, pptx traversal, sub-agent policy, denylist shapes, preview-origin isolation), wired into `npm test`.
+
 ## [0.0.7] — 2026-09-18
 
 ### Security

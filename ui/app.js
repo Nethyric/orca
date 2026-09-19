@@ -7,6 +7,10 @@ const el = (tag, cls, html) => { const e = document.createElement(tag); if (cls)
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const ico = (name, cls = '') => `<svg class="${cls}"><use href="#i-${name}"/></svg>`;
 const TOK = window.__ORCA_TOKEN__ || '';
+// Isolated preview origin (separate port serving ONLY static workspace files, no API, no token).
+// Previewed agent-generated HTML must never share the app's origin, or it could read the API token.
+const PREV_PORT = parseInt(window.__ORCA_PREVIEW__, 10) || 0;
+const PREV_BASE = PREV_PORT ? (location.protocol + '//' + location.hostname + ':' + PREV_PORT) : '';
 const authHdr = () => (TOK ? { 'x-orca-token': TOK } : {});
 const authQs = (p) => (TOK ? p + (p.includes('?') ? '&' : '?') + 'token=' + TOK : p);
 const api = async (p, o = {}) => { const r = await fetch(p, { headers: { 'content-type': 'application/json', ...authHdr() }, ...o, body: o.body ? JSON.stringify(o.body) : undefined }); return r.json(); };
@@ -738,16 +742,21 @@ function livePreview(p, content) {
   const body = $('#preview-body'); body.innerHTML = ''; const acts = $('#preview-actions'); acts.innerHTML = '';
   PV.path = p; PV.src = wsUrl(p);
   const stage = el('div', 'pv-stage'); const frameBox = el('div', 'pv-frame'); const f = el('iframe');
-  f.sandbox = 'allow-scripts allow-same-origin allow-forms allow-modals allow-popups'; f.src = PV.src + '?t=' + Date.now(); f.title = p;
+  // Security: previews load from the isolated preview origin (no API, no token). Only if that
+  // origin is unavailable do we fall back to the app origin — and then with a locked-down sandbox
+  // (no allow-same-origin), so the preview still cannot reach the UI or its token.
+  if (PREV_BASE) { f.sandbox = 'allow-scripts allow-same-origin allow-forms allow-modals'; f.src = PREV_BASE + PV.src + '?t=' + Date.now(); }
+  else { f.sandbox = 'allow-scripts allow-forms allow-modals'; f.src = PV.src + '?t=' + Date.now(); }
+  f.title = p;
   const urlbar = el('div', 'pv-url'); urlbar.innerHTML = `<span class="dots"><i></i><i></i><i></i></span><span class="addr mono">${esc(p)}</span><span class="dim mono" id="pv-dim"></span>`;
   frameBox.append(urlbar, f); stage.appendChild(frameBox); body.appendChild(stage);
   const seg = el('div', 'seg pv-seg');
   for (const [k, d] of Object.entries(DEVICES)) { const b = el('button', 'ib sm' + (PV.device === k ? ' on' : ''), ico(d.ico)); b.dataset.tip = ({ phone: { en: 'Phone', fa: 'موبایل', ru: 'Телефон', zh: '手机' }, tablet: { en: 'Tablet', fa: 'تبلت', ru: 'Планшет', zh: '平板' }, desktop: { en: 'Desktop', fa: 'کامپیوتر', ru: 'Компьютер', zh: '电脑' } })[k][lang] || k; b.onclick = () => { PV.device = k; localStorage.setItem('orca.pv.device', k); $$('.pv-seg .ib').forEach((x) => x.classList.remove('on')); b.classList.add('on'); applyDevice(); }; seg.appendChild(b); }
   const rot = el('button', 'ib sm', ico('rotate')); rot.dataset.tip = ({ fa: 'چرخش', ru: 'Повернуть', zh: '旋转' })[lang] || 'Rotate'; rot.onclick = () => { PV.rot = !PV.rot; applyDevice(); };
   const full = el('button', 'ib sm', ico('maximize')); full.dataset.tip = ({ fa: 'تمام‌صفحه (Esc)', ru: 'Во весь экран (Esc)', zh: '全屏 (Esc)' })[lang] || 'Full window (Esc)'; full.onclick = () => setPreviewFull(!PV.full);
-  const rf = el('button', 'ib sm', ico('refresh')); rf.dataset.tip = ({ fa: 'بارگذاری مجدد', ru: 'Обновить', zh: '刷新' })[lang] || 'Reload'; rf.onclick = () => (f.src = PV.src + '?t=' + Date.now());
+  const rf = el('button', 'ib sm', ico('refresh')); rf.dataset.tip = ({ fa: 'بارگذاری مجدد', ru: 'Обновить', zh: '刷新' })[lang] || 'Reload'; rf.onclick = () => (f.src = (PREV_BASE || '') + PV.src + '?t=' + Date.now());
   const b = el('button', 'ib sm', ico('edit')); b.dataset.tip = t('edit'); b.onclick = () => { setPreviewFull(false); editFile(p, content); };
-  const o = el('button', 'ib sm', ico('external')); o.dataset.tip = ({ fa: 'باز کردن در مرورگر', ru: 'Открыть в браузере', zh: '在浏览器中打开' })[lang] || 'Open in browser'; o.onclick = () => (desktop ? desktop.openExternal(location.origin + PV.src) : window.open(PV.src, '_blank'));
+  const o = el('button', 'ib sm', ico('external')); o.dataset.tip = ({ fa: 'باز کردن در مرورگر', ru: 'Открыть в браузере', zh: '在浏览器中打开' })[lang] || 'Open in browser'; o.onclick = () => (desktop ? desktop.openExternal((PREV_BASE || location.origin) + PV.src) : window.open((PREV_BASE || '') + PV.src, '_blank'));
   acts.append(seg, rot, rf, full, b, o);
   function applyDevice() {
     const d = DEVICES[PV.device] || DEVICES.desktop; const dim = $('#pv-dim');

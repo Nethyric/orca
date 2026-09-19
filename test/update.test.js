@@ -62,7 +62,7 @@ const zipDir = (dir, out) => { cp.execSync(`cd ${JSON.stringify(path.dirname(dir
   });
   await new Promise((r) => srv.listen(0, '127.0.0.1', r)); const u = `http://127.0.0.1:${srv.address().port}`;
   remote.MIRRORS.length = 0; remote.MIRRORS.push(`${u}/dead/`, `${u}/mirror/`);
-  const release = { available: true, latest: '0.0.6', asset: { name: 'ORCA-Agent-0.0.6-win-x64.zip', url: `${u}/dead/ORCA-Agent-0.0.6-win-x64.zip`, size: winBuf.length, sha256: '' }, sums: `${u}/dead/SHA256SUMS`, kind: 'win-portable' };
+  const release = { available: true, latest: '0.0.6', asset: { name: 'ORCA-Agent-0.0.6-win-x64.zip', url: `${u}/dead/ORCA-Agent-0.0.6-win-x64.zip`, size: winBuf.length, sha256: '' }, sums: `${u}/SHA256SUMS`, kind: 'win-portable' }; // sums from the official source only — mirrors must not vouch for checksums
   remote._override({ kind: 'dev', release });
   let last = null; const p1 = remote.downloadUpdate((d) => { last = d; });
   for (let i = 0; i < 200 && !(last && last.bytes > 256 * 1024); i++) await sleep(10);
@@ -127,6 +127,11 @@ const zipDir = (dir, out) => { cp.execSync(`cd ${JSON.stringify(path.dirname(dir
   // ---- checksum mismatch on download → file discarded ----
   { fs.rmSync(path.join(process.env.ORCA_DATA, 'updates'), { recursive: true, force: true }); sumsSha = 'f'.repeat(64); remote._override({ kind: 'dev', release });
     const d = await remote.downloadUpdate(() => {}); ok('download-mismatch', !d.ready && /checksum/.test(d.error) && !fs.existsSync(path.join(process.env.ORCA_DATA, 'updates', release.asset.name)), d.error); }
+  // ---- NO trusted checksum at all → the package must be refused, never installed ----
+  { fs.rmSync(path.join(process.env.ORCA_DATA, 'updates'), { recursive: true, force: true });
+    remote._override({ kind: 'dev', release: { ...release, asset: { ...release.asset, sha256: '' }, sums: `${u}/dead/SHA256SUMS` } });
+    const d = await remote.downloadUpdate(() => {});
+    ok('download-no-checksum-refused', !d.ready && /no trusted checksum/.test(d.error) && !fs.existsSync(path.join(process.env.ORCA_DATA, 'updates', release.asset.name)), d.error); }
 
   srv.close(); fs.rmSync(tmp, { recursive: true, force: true });
   console.log(failed ? `\n${failed} FAILED` : '\nALL PASS'); process.exit(failed ? 1 : 0);

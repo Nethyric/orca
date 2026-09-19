@@ -18,7 +18,7 @@ const UI = path.join(__dirname, '..', 'ui');
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'application/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.woff2': 'font/woff2', '.json': 'application/json' };
 
 const json = (res, code, obj) => { res.writeHead(code, { 'content-type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(obj)); };
-const readBody = (req) => new Promise((resolve) => { let b = ''; req.on('data', (d) => (b += d)); req.on('end', () => { try { resolve(b ? JSON.parse(b) : {}); } catch (_) { resolve({}); } }); });
+const readBody = (req, max = 50 * 1024 * 1024) => new Promise((resolve) => { let b = ''; let n = 0; let over = false; req.on('data', (d) => { n += d.length; if (n > max) { if (!over) { over = true; console.warn('[api] request body exceeded limit — connection dropped'); req.destroy(); } return; } b += d; }); req.on('end', () => { try { resolve(b ? JSON.parse(b) : {}); } catch (_) { resolve({}); } }); req.on('error', () => resolve({})); });
 const readRaw = (req, max = 60 * 1024 * 1024) => new Promise((resolve, reject) => { const chunks = []; let n = 0; req.on('data', (d) => { n += d.length; if (n > max) { reject(new Error('file too large')); req.destroy(); } else chunks.push(d); }); req.on('end', () => resolve(Buffer.concat(chunks))); req.on('error', reject); });
 const IMG_EXT = /\.(png|jpe?g|gif|webp|bmp)$/i;
 const analysisCache = new Map(); // rel path -> analysis
@@ -353,7 +353,9 @@ async function handleApi(req, res, url) {
 
 async function readPptx(rp) {
   const JSZip = require('jszip');
-  const f = path.join(config.workspaceDir(), rp);
+  const root = path.resolve(config.workspaceDir());
+  const f = path.resolve(root, String(rp || '')); // workspace-only, like every other read tool (safe())
+  if (f !== root && !f.startsWith(root + path.sep)) return { error: 'path escapes workspace' };
   const zip = await JSZip.loadAsync(fs.readFileSync(f));
   const names = Object.keys(zip.files).filter((n) => /^ppt\/slides\/slide\d+\.xml$/.test(n)).sort((a, b) => +a.match(/(\d+)\.xml/)[1] - +b.match(/(\d+)\.xml/)[1]);
   const out = [];
@@ -392,7 +394,9 @@ function serveStatic(req, res, url) {
   if (url.pathname === '/' || url.pathname === '/index.html') {
     // Inject the local API token into the page so the UI can authenticate. Only the quoted
     // placeholder value is replaced (never the variable name itself).
-    const html = fs.readFileSync(fp, 'utf8').replace("'__ORCA_TOKEN__'", "'" + config.apiToken() + "'");
+    const html = fs.readFileSync(fp, 'utf8')
+      .replace("'__ORCA_TOKEN__'", "'" + config.apiToken() + "'")
+      .replace("'__ORCA_PREVIEW__'", JSON.stringify(previewPort || ''));
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache' });
     return res.end(html);
   }
@@ -401,6 +405,25 @@ function serveStatic(req, res, url) {
   if (/\.(js|css|html|svg|json)$/.test(ext) && ae.includes('gzip')) { headers['content-encoding'] = 'gzip'; res.writeHead(200, headers); return fs.createReadStream(fp).pipe(zlib.createGzip({ level: 6 })).pipe(res); }
   res.writeHead(200, headers);
   fs.createReadStream(fp).pipe(res);
+}
+
+// ---- isolated preview origin ----
+// Agent-generated HTML must never run on the app's origin: a same-origin iframe could read the
+// injected API token and drive the whole agent. The preview therefore runs on its own port that
+// serves ONLY static workspace files — no /api, no token, nothing else. The UI embeds previews
+// from this origin; the browser's same-origin policy then does the isolation for us.
+let previewPort = 0;
+function createPreviewServer() {
+  return http.createServer((req, res) => {
+    try {
+      if (badHost(req)) { res.writeHead(403); return res.end('forbidden host'); }
+      const url = new URL(req.url, 'http://localhost');
+      res.setHeader('x-content-type-options', 'nosniff');
+      let rel = url.pathname.replace(/^\/+/, '');
+      if (rel.startsWith('ws/')) rel = rel.slice(3); // the UI asks for /ws/<file>; serveWorkspace decodes once
+      return serveWorkspace(res, rel);
+    } catch (e) { try { res.writeHead(500); res.end('error'); } catch (_) {} }
+  });
 }
 
 function createServer() {
@@ -443,7 +466,16 @@ function listen(port, host) {
   return new Promise((resolve, reject) => {
     const srv = createServer();
     srv.on('error', reject);
-    srv.listen(port, host, () => resolve({ server: srv, port: srv.address().port }));
+    srv.listen(port, host, async () => {
+      // preview server: separate origin for agent-generated HTML (see createPreviewServer)
+      try {
+        const psv = createPreviewServer();
+        await new Promise((res2, rej2) => { psv.on('error', rej2); psv.listen(0, boundHost === '0.0.0.0' ? '0.0.0.0' : '127.0.0.1', () => res2()); });
+        previewPort = psv.address().port;
+        srv.previewServer = psv;
+      } catch (_) { previewPort = 0; }
+      resolve({ server: srv, port: srv.address().port });
+    });
   });
 }
 

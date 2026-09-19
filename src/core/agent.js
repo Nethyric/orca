@@ -754,6 +754,14 @@ async function requestApproval(run, emit, call, risk) {
   return new Promise((resolve) => { run.approvals.set(call.id, { resolve, cmd }); });
 }
 
+// Delegated sub-agents (lane 'sub', tool `task`) run without the user watching a prompt, so they
+// must NEVER be able to do what would require the user's approval in the main conversation.
+// Anything high-risk is denied outright; the main agent gets a clear error and can surface it.
+function subDecision(risk) {
+  if (risk === 'high') return 'deny:delegated sub-agents may not run high-risk commands — ask the user and run this from the main conversation instead';
+  return 'allow';
+}
+
 /**
  * runAgent({ chatId, history, modelKey, emit, runId, planMode, autonomy, lane })
  * emit(event, data). Events: status, delta, thought_done, tool_call, tool_result, approval, checkpoint,
@@ -908,7 +916,7 @@ async function runAgent(o) {
       for (const call of prepared) {
         if (stopped()) { emit('stopped', {}); return { api, checkpoints, stopped: true }; }
         let risk = tools.riskOf(call.name, call.args);
-        if (call.name === 'run_shell' && risk === 'medium' && autonomy !== 'yolo' && judge.enabled()) {
+        if (call.name === 'run_shell' && risk === 'medium' && (autonomy !== 'yolo' || o.lane === 'sub') && judge.enabled()) {
           // the regex only knows a fixed list; the decision engine reads the command (`curl … | sudo bash`, `git checkout -- .`, pipes to remote hosts)
           const p = await judge.commandRisk(String(call.args.command || ''), config.workspaceDir()).catch(() => null);
           if (p != null && p >= 0.7) { risk = 'high'; call.judged = p; }
@@ -916,11 +924,12 @@ async function runAgent(o) {
         emit('tool_call', { id: call.id, name: call.name, args: call.args, risk, ...(call.judged ? { judged: call.judged } : {}) });
         let decision = 'allow';
         if (o.planMode && MUTATING_ALL.has(call.name)) decision = 'deny_plan';
+        else if (o.lane === 'sub') decision = subDecision(risk);
         else if (autonomy === 'ask' && risk !== 'none') decision = await requestApproval(run, emit, call, risk);
         else if (autonomy === 'auto' && risk === 'high') decision = await requestApproval(run, emit, call, risk);
-        else if (autonomy === 'auto' && risk === 'medium' && (call.name === 'run_shell' || call.name === 'start_process')) {
-          // shell/process commands in auto mode still need one confirmation, unless the user already
-          // approved this exact command for this session
+        else if (autonomy === 'auto' && risk === 'medium' && (call.name === 'run_shell' || call.name === 'start_process' || call.name === 'task')) {
+          // shell/process commands and delegated sub-agents in auto mode still need one confirmation,
+          // unless the user already approved this exact command for this session
           const cmd = String(call.args.command || '').trim();
           if (!run.sessionAllowed || !run.sessionAllowed.has(cmd)) decision = await requestApproval(run, emit, call, risk);
         }
@@ -1045,7 +1054,7 @@ tools.extras.setSubagentRunner(async ({ description, prompt, model, maxSteps }) 
   const emit = (ev, d) => { if (ev === 'tool_call' || ev === 'tool_result' || ev === 'status') { events.push({ ev, d }); if (parent) parent('sub_event', { runId, description, event: ev, data: ev === 'tool_result' ? { ...d, result: String(d.result || '').slice(0, 300) } : d }); } };
   const history = [{ role: 'user', content: `You are a sub-agent of ORCA working on one delegated task. Do it fully with tools, then reply with a complete, self-contained report (facts, file paths, code snippets, blockers). Do not ask questions — decide and proceed.\n\nTASK: ${description}\n\n${prompt}` }];
   const t0 = Date.now();
-  const r = await runAgent({ chatId: 'sub', runId, history, modelKey, emit, autonomy: 'yolo', maxSteps: maxSteps || 14, lane: 'sub' });
+  const r = await runAgent({ chatId: 'sub', runId, history, modelKey, emit, autonomy: 'yolo', maxSteps: maxSteps || 14, lane: 'sub' }); // lane 'sub' enforces subDecision(): high-risk calls are denied, approvals never hang
   const toolsUsed = events.filter((e) => e.ev === 'tool_call').map((e) => e.d.name);
   return { description, report: r.text || r.error || '(no report)', tools_used: toolsUsed.length, steps: toolsUsed.slice(0, 40), seconds: Math.round((Date.now() - t0) / 1000), model: r.model };
 });
@@ -1133,4 +1142,4 @@ async function anthropicOnce(cfg, messages, onDelta, ctl, kick, useTools, temper
   return { content, reasoning, tool_calls: calls, usage, finish: finish === 'max_tokens' ? 'length' : finish };
 }
 
-module.exports = { runAgent, stopRun, approve, quick, compact, systemPrompt, splitReasoning, routeAuto, routeAutoJudged, classifyRequest, capabilityReport, fitContext, salvageArgs };
+module.exports = { runAgent, stopRun, approve, quick, compact, systemPrompt, splitReasoning, routeAuto, routeAutoJudged, classifyRequest, capabilityReport, fitContext, salvageArgs, subDecision };

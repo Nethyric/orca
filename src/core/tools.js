@@ -2,7 +2,7 @@
 // Real tool implementations. Everything runs on the user's machine inside the workspace.
 const fs = require('fs');
 const path = require('path');
-const { execSync, spawn } = require('child_process');
+const { execSync, execFileSync, spawn } = require('child_process');
 const config = require('./config');
 
 const isWin = process.platform === 'win32';
@@ -151,18 +151,20 @@ const impl = {
     try {
       if (ext === '.json') { try { JSON.parse(fs.readFileSync(f, 'utf8')); return { ok: true }; } catch (e) { return { ok: false, message: e.message.slice(0, 200) }; } }
       if (['.js', '.mjs', '.cjs'].includes(ext)) {
+        // Security: execFileSync with an argument array — never through a shell, so a hostile
+        // filename ($(...), backticks, quotes) cannot inject commands.
         const env = { ...childEnv(), ...(process.versions.electron ? { ELECTRON_RUN_AS_NODE: '1' } : {}) };
         const opts = { stdio: 'pipe', windowsHide: true, timeout: 10000, env };
-        try { execSync(`"${process.execPath}" --check "${f}"`, opts); return { ok: true }; }
+        try { execFileSync(process.execPath, ['--check', f], opts); return { ok: true }; }
         catch (e) {
           const msg = String(e.stderr || e.message || '');
           if (ext === '.js' && /import statement outside a module|Unexpected token 'export'|Cannot use import|top-level await/i.test(msg)) { // ES module in a .js file → re-check as module
-            try { execSync(`"${process.execPath}" --input-type=module --check`, { ...opts, input: fs.readFileSync(f) }); return { ok: true }; } catch (e2) { return { ok: false, message: fmtSyntax(String(e2.stderr || e2.message || '')) }; }
+            try { execFileSync(process.execPath, ['--input-type=module', '--check'], { ...opts, input: fs.readFileSync(f) }); return { ok: true }; } catch (e2) { return { ok: false, message: fmtSyntax(String(e2.stderr || e2.message || '')) }; }
           }
           return { ok: false, message: fmtSyntax(msg) };
         }
       }
-      if (ext === '.py') { const py = findPython(); if (!py) return null; try { execSync(`${py} -m py_compile "${f}"`, { stdio: 'pipe', windowsHide: true, timeout: 10000, env: childEnv(), shell: isWin ? 'cmd.exe' : '/bin/sh' }); return { ok: true }; } catch (e) { return { ok: false, message: fmtSyntax(String(e.stderr || e.message || '')) }; } }
+      if (ext === '.py') { const py = findPython(); if (!py) return null; try { const [pyBin, ...pyArgs] = py.split(/\s+/); execFileSync(pyBin, [...pyArgs, '-m', 'py_compile', f], { stdio: 'pipe', windowsHide: true, timeout: 10000, env: childEnv() }); return { ok: true }; } catch (e) { return { ok: false, message: fmtSyntax(String(e.stderr || e.message || '')) }; } }
     } catch (_) {}
     return null;
   },
@@ -430,7 +432,7 @@ const SCHEMAS = [
   { type: 'function', function: { name: 'list_processes', description: 'List background processes started in this session with status, uptime and open ports.', parameters: { type: 'object', properties: {} } } },
 ];
 
-const DANGEROUS = /\b(rm\s+-rf|Remove-Item[^\n]*-Recurse|del\s+\/[sq]|rmdir\s+\/s|format\s+[a-z]:|mkfs|dd\s+if=|shutdown|reboot|Restart-Computer|Stop-Computer|diskpart|reg\s+delete|git\s+push\s+--force|git\s+reset\s+--hard|git\s+(checkout|restore)\s+(--\s+)?\.(\s|$)|git\s+clean\s+-\w*f|sudo\s+rm|chmod\s+-R\s+777\s+\/|(curl|wget)[^\n|;]*\|\s*(sudo\s+)?(ba|z|da)?sh|find\s+[^;\n]*-delete|shutil\.rmtree|os\.system\s*\(|eval\s*\(\s*(base64|atob|exec)|Invoke-Expression|iex\s+\(|icacls[^\n]*\/grant[^\n]*Everyone|schtasks[^\n]*\/create|regsvr32[^\n]*\/s[^\n]*http|xargs[^\n]*rm\s+-rf)/i;
+const DANGEROUS = /(\b(rm\s+(-\w+\s+)*-\w*r\w*f|rm\s+(-\w+\s+)*-\w*f\w*r|rm\s+(-\w+\s+)*-\w*r\w*(\s|$)|Remove-Item[^\n]*-Recurse|del\s+\/[sq]|rmdir\s+\/s|format\s+[a-z]:|mkfs|dd\s+if=|shutdown|reboot|Restart-Computer|Stop-Computer|diskpart|reg\s+delete|git\s+push\s+(-f\b|--force\b)|git\s+reset\s+--hard|git\s+(checkout|restore)\s+(--\s+)?\.(\s|$)|git\s+clean\s+-\w*f|sudo\s+rm|chmod\s+-R\s+777\s+\/|(curl|wget)[^\n|;]*\|\s*(sudo\s+)?(ba|z|da)?sh\b|base64\s+(-d\b|-D\b|--decode)[^\n|]*\|[^\n|]*(ba|z|da)?sh\b|find\s+[^;\n]*(-delete|-exec\b)|shutil\.rmtree|os\.system\s*\(|eval\s*\(\s*(base64|atob|exec)|Invoke-Expression|iex\s+\(|icacls[^\n]*\/grant[^\n]*Everyone|schtasks[^\n]*\/create|regsvr32[^\n]*\/s[^\n]*http|xargs[^\n]*rm\s+-rf)|\|\s*(sudo\s+)?(ba|z|da)?sh\b)/i;
 const DANGEROUS_RAW = /(:\(\)\s*\{|>\s*\/(dev\/sd[a-z]?|etc\/(passwd|shadow|sudoers))|mkfs\.\w+|\.\.\/\.\.\/[^\n]*(passwd|shadow))/i;
 SCHEMAS.push(...office.SCHEMAS, ...extras.SCHEMAS);
 
