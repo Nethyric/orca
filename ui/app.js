@@ -128,7 +128,7 @@ document.addEventListener('mouseover', (e) => { const b = e.target.closest('[dat
 document.addEventListener('mousedown', () => tip.classList.remove('show'));
 
 // ───────────────────────── model pickers ─────────────────────────
-function closeModelMenu() { const m = $('#pk-menu'); if (!m) return; if (m._key) document.removeEventListener('keydown', m._key); m.remove(); }
+function closeModelMenu() { const m = $('#pk-menu'); if (!m) return; if (m._key) document.removeEventListener('keydown', m._key, true); m.remove(); }
 function openModelMenu(anchor, value, onChange) {
   closeModelMenu();
   const menu = el('div', 'pk-menu'); menu.id = 'pk-menu'; menu.setAttribute('role', 'listbox');
@@ -150,6 +150,7 @@ function openModelMenu(anchor, value, onChange) {
   menu.style.top = (r.bottom + 6 + mh > innerHeight - 8 ? Math.max(8, r.top - mh - 6) : r.bottom + 6) + 'px';
   const items = $$('.pk-item', menu); let i = Math.max(0, items.findIndex((x) => x.classList.contains('sel')));
   menu._key = (e) => {
+    if (!menu.isConnected) { document.removeEventListener('keydown', menu._key, true); return; } // never swallow keys for a menu that is gone
     if (e.key === 'Escape') { closeModelMenu(); anchor.focus(); }
     else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); e.stopPropagation(); i = (i + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length; items.forEach((x, k) => x.classList.toggle('hov', k === i)); items[i].scrollIntoView({ block: 'nearest' }); }
     else if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); items[i].click(); }
@@ -975,7 +976,7 @@ async function providerEditor(existingId) {
     draw('');
     $('#pe-q', menu).oninput = (e) => draw(e.target.value);
     $('.pe-pickwrap').appendChild(menu);
-    menu._key = (e) => { if (e.key === 'Escape') { closePeMenu(); $('#pe-pick').focus(); } };
+    menu._key = (e) => { if (!menu.isConnected) { document.removeEventListener('keydown', menu._key); return; } if (e.key === 'Escape') { closePeMenu(); $('#pe-pick').focus(); } };
     document.addEventListener('keydown', menu._key);
     $('#pe-q', menu).focus();
   };
