@@ -4,9 +4,7 @@ All notable changes to ORCA are documented here. The format follows [Keep a Chan
 
 ## [Unreleased]
 
-## [1.0.0] — 2026-09-23
-
-First stable release.
+## [0.0.9] — 2026-09-23
 
 ### Added
 - **MCP (Model Context Protocol) client.** Connect external tool servers from Settings → MCP over `stdio` or Streamable HTTP (with a legacy SSE fallback), import a Claude Desktop `mcpServers` config as-is, or add a ready-made preset (Filesystem, Fetch, Git, GitHub, Memory, Brave Search, Playwright, Hugging Face) in one click. Servers spawn lazily, reconnect quietly, expose per-tool toggles, and can run in `compact` mode so their schemas stay out of the context until needed. Tool manifests are fingerprinted to detect silent redefinition, and every MCP result is treated as untrusted content.
