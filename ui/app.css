@@ -638,3 +638,7 @@ input[type=range]::-moz-range-thumb{width:12px;height:12px;border-radius:50%;bac
 .pe-menu{position:absolute;top:calc(100% + 4px);inset-inline-start:0;width:100%;max-height:340px;overflow:auto;z-index:60}
 .pe-menu .pe-search{margin:6px;width:calc(100% - 12px)}
 .pe-list{padding:4px}
+
+/* VS Code look for highlighted code blocks (must beat .content pre code above) */
+.content pre code.hljs{background:#1e1e1e;color:#d4d4d4;padding:12px 14px;border-radius:0 0 10px 10px}
+[data-theme=light] .content pre code.hljs{background:#ffffff;color:#000000}

@@ -4,6 +4,15 @@ All notable changes to ORCA are documented here. The format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.1.1] — 2026-09-23
+
+### Fixed
+- **Keyboard no longer swallowed after using the model picker.** The picker menu registered its key handler on the document in the capture phase but was removed without the capture flag, so an orphaned listener kept blocking Space, Enter and arrow keys app-wide (and could change the model by itself). The listener is now removed correctly and menu handlers detach themselves if their menu ever leaves the DOM.
+
+### Changed
+- **Attachments are per conversation.** Files and images you attach stay with the chat they were added in; switching chats shows that chat's own pending list.
+- **Model picker is text-only** — brand logos removed from the picker button and its dropdown.
+- **VS Code syntax themes** for code blocks: Dark+ in dark mode, Light+ in light mode, token colours matching the editor's built-in palettes.
 ## [0.1.0] — 2026-09-23
 
 ### Added

@@ -139,7 +139,7 @@ function openModelMenu(anchor, value, onChange) {
     for (const x of list) {
       const row = el('button', 'pk-item' + (x.key === value ? ' sel' : ''));
       row.setAttribute('role', 'option'); row.setAttribute('aria-selected', x.key === value ? 'true' : 'false');
-      row.innerHTML = `<span class="pk-i-top">${brandMark(x)}<span class="pk-i-label">${esc(x.label)}</span>${x.tier ? `<em class="pk-i-tier">${esc(t('tier')[x.tier] || '')}</em>` : ''}${x.key === value ? ico('check', 'pk-i-check') : ''}</span><span class="pk-i-sub">${esc(x.note?.[lang] || x.vendor || '')}</span>`;
+      row.innerHTML = `<span class="pk-i-top"><span class="pk-i-label">${esc(x.label)}</span>${x.tier ? `<em class="pk-i-tier">${esc(t('tier')[x.tier] || '')}</em>` : ''}${x.key === value ? ico('check', 'pk-i-check') : ''}</span><span class="pk-i-sub">${esc(x.note?.[lang] || x.vendor || '')}</span>`;
       row.onclick = (e) => { e.stopPropagation(); closeModelMenu(); buildPicker(anchor, x.key, onChange); onChange(x.key); };
       menu.appendChild(row);
     }
@@ -161,7 +161,7 @@ function openModelMenu(anchor, value, onChange) {
 function buildPicker(container, value, onChange) {
   container.innerHTML = '';
   const m = modelOf(value) || S.cfg.models[0];
-  container.append(el('span', 'pk-brand', brandMark(m)), el('span', 'pk-label', esc(m?.label || value)), el('span', 'pk-tier', m ? esc(t('tier')[m.tier] || '') : ''), el('span', 'pk-chev', ico('chev')));
+  container.append(el('span', 'pk-label', esc(m?.label || value)), el('span', 'pk-tier', m ? esc(t('tier')[m.tier] || '') : ''), el('span', 'pk-chev', ico('chev')));
   container.tabIndex = 0; container.setAttribute('role', 'button'); container.setAttribute('aria-haspopup', 'listbox');
   container.onclick = (e) => { e.stopPropagation(); openModelMenu(container, container.value, onChange); };
   container.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openModelMenu(container, container.value, onChange); } };
@@ -207,12 +207,12 @@ function setMode(m) { S.mode = m; $$('#mode-seg button').forEach((b) => b.classL
 $$('#mode-seg button').forEach((b) => (b.onclick = () => { if (runningHere()) return toast(t('running'), 'err'); if (S.chat && S.chat.messages.length && S.chat.mode !== b.dataset.mode) newChat(); setMode(b.dataset.mode); }));
 // runs that belong to the chat currently on screen (others keep streaming in the background and are re-rendered when you return)
 const runningHere = () => [...S.lanes.values()].some((L) => L.group && L.group.chatId === S.chat?.id && S.running.has(L.runId));
-function newChat() { S.chat = null; S.regenFrom = null; S.queue = []; renderQueue(); setBusy(false); refreshPins(); refreshNotes(); $('#messages').innerHTML = ''; $('#welcome').classList.remove('hidden'); $('#tb-title').textContent = ''; $('#tab-timeline').innerHTML = `<div class="empty">${t('emptyTimeline')}</div>`; $('#changes-list').innerHTML = ''; $('#chg-badge').classList.add('hidden'); renderChatList(S.chats); $('#input').focus(); }
+function newChat() { S.chat = null; S.regenFrom = null; S.queue = []; renderQueue(); setBusy(false); refreshPins(); refreshNotes(); $('#messages').innerHTML = ''; $('#welcome').classList.remove('hidden'); $('#tb-title').textContent = ''; $('#tab-timeline').innerHTML = `<div class="empty">${t('emptyTimeline')}</div>`; $('#changes-list').innerHTML = ''; $('#chg-badge').classList.add('hidden'); renderChatList(S.chats); swapAtts(); $('#input').focus(); }
 $('#new-chat').onclick = newChat;
 
 async function openChat(id, focusMsg) {
   const c = await api('/api/chats/' + id); if (c.error) return;
-  S.chat = c; setMode(c.mode || 'direct');
+  S.chat = c; setMode(c.mode || 'direct'); swapAtts();
   $('#welcome').classList.add('hidden'); $('#tb-title').textContent = c.title || '';
   setBusy(runningHere());
   const box = $('#messages'); box.innerHTML = '';
@@ -482,6 +482,10 @@ $('#chat-notes').oninput = () => { if (!S.chat) return; const v = $('#chat-notes
 $$('#autonomy button').forEach((b) => (b.onclick = () => { S.autonomy = b.dataset.a; $$('#autonomy button').forEach((x) => x.classList.toggle('active', x === b)); api('/api/config', { method: 'POST', body: { autonomy: S.autonomy } }); toast(b.dataset.tip); }));
 $('#attach-btn').onclick = () => $('#file-input').click();
 const isImg = (f) => /^image\//.test(f.type) || /\.(png|jpe?g|gif|webp|bmp)$/i.test(f.name || '');
+// pending attachments belong to the conversation they were added in — switching chats swaps the list
+S._atts = {};
+const attKey = () => (S.chat ? S.chat.id : '__draft__');
+function swapAtts() { const k = attKey(); if (!S._atts[k]) S._atts[k] = []; S.attach = S._atts[k]; renderAttach(); }
 async function addFiles(files) {
   for (const f of files) {
     if (f.size > 40e6) { toast(f.name + ': >40MB', 'err'); continue; }
