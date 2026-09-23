@@ -24,6 +24,11 @@
   <a href="docs/README.fa.md">فارسی</a>
 </p>
 
+<p align="center">
+  <b>English</b> · <a href="README.ru.md">Русский</a> · <a href="README.zh.md">中文</a> · <a href="docs/README.fa.md">فارسی</a> ·
+  <a href="https://nethyric.github.io/orca/">Documentation site</a>
+</p>
+
 ---
 
 ORCA is a desktop agent that plans, writes code, runs it, reads the errors and fixes them — on your machine, in your files. It ships with built-in models that work out of the box, and connects to 200+ providers or any OpenAI‑compatible endpoint with your own key.
@@ -49,7 +54,7 @@ Download the build for your system from [Releases](https://github.com/Nethyric/o
 | Windows 10/11 x64 | `ORCA-Agent-<version>-win-x64.zip` | extract, run `ORCA.exe` (portable, no admin rights) |
 | macOS 12+ (Apple Silicon) | `ORCA-Agent-<version>-mac-arm64.dmg` / `.zip` | drag to Applications; first launch: right-click → Open |
 | macOS 12+ (Intel) | `ORCA-Agent-<version>-mac-x64.dmg` / `.zip` | same |
-| Linux x64 | `ORCA-Agent-<version>-linux-x64.AppImage` / `.tar.gz` | `chmod +x` and run |
+| Linux x64 | `ORCA-Agent-<version>-linux-x64.AppImage` / `.tar.gz` / `.deb` | `chmod +x` and run, or `sudo apt install ./ORCA-Agent-*.deb` |
 
 Builds are not code-signed; `SHA256SUMS` is attached to every release. The app updates itself: it checks the release channel, downloads the package for your OS/CPU in the background (resumable, mirrors when GitHub is blocked), verifies the SHA-256 and installs it on restart — no browser needed (Settings → Updates).
 
@@ -66,6 +71,15 @@ npm run web        # or: browser UI at http://localhost:7860
 > [!TIP]
 > Built-in models work immediately in release builds. A source checkout has no vault key, so add a provider in **Settings → Models** (or set `ORCA_VAULT_KEY` if you are the maintainer). See [docs/setup.md](docs/setup.md).
 
+## MCP (Model Context Protocol)
+
+ORCA ships a minimal, dependency-free MCP client: connect external tool servers from Settings → MCP
+(or paste a Claude Desktop `mcpServers` config as-is). Both transports are supported — `stdio`
+(local subprocess) and Streamable HTTP (with a legacy SSE fallback). Servers spawn lazily and
+reconnect quietly; every result is treated as untrusted content, tool manifests are fingerprinted
+to detect silent redefinition, and each tool can be toggled per server. Use `compact` mode to keep
+a server's schemas out of the context until the agent discovers them on demand.
+
 ## Providers
 
 Open **Settings → Models → Add provider**, pick a provider from the catalog (or *Custom* for any OpenAI-compatible URL), paste a key, press **Discover** to list its models, **Test**, **Save**. Keys are stored only in your local `config.json`.
@@ -76,14 +90,17 @@ Anthropic-style and OpenAI-style APIs are both supported, as are local servers (
 
 | | |
 |---|---|
+| **[Documentation site](https://nethyric.github.io/orca/)** | The same guides, rendered — with search and dark mode |
 | [Overview](docs/README.md) | What ORCA is, how a run works, the UI |
 | [Setup](docs/setup.md) | Install, build from source, data folder, environment variables |
 | [Configuration](docs/configuration.md) | Every `config.json` key, rules, persona, autonomy |
 | [Providers](docs/providers.md) | Adding providers and models, local models, troubleshooting keys |
-| [Tools](docs/tools.md) | Reference for all 42 agent tools |
+| [Tools](docs/tools.md) | Reference for all 46 agent tools |
 | [HTTP API](docs/api.md) | The local REST + SSE API used by the UI (and usable by scripts) |
 | [Built-in models & the vault](docs/vault.md) | How built-in keys are shipped, rotated and protected |
 | [Decision engine](docs/decision-engine.md) | Optional System One model for routing, command-risk review, answer verification and search re-ranking |
+| [MCP](docs/mcp.md) | Connecting external tool servers (stdio / HTTP, presets, security) |
+| [Updates & releases](docs/updates.md) | How self-update works, the release feed, manual installs |
 | [Troubleshooting](docs/troubleshooting.md) | Common problems and fixes |
 | [Security](SECURITY.md) | Threat model, reporting |
 
@@ -93,7 +110,7 @@ Anthropic-style and OpenAI-style APIs are both supported, as are local servers (
 npm run fetch-bins   # ffmpeg, yt-dlp, OCR data (not in git)
 npm run dist:win     # release/ORCA-Agent-<version>-win-x64.zip
 npm run dist:mac     # release/ORCA-Agent-<version>-mac-{x64,arm64}.{zip,dmg}   (on macOS)
-npm run dist:linux   # release/ORCA-Agent-<version>-linux-x64.{AppImage,tar.gz}
+npm run dist:linux   # release/ORCA-Agent-<version>-linux-x64.{AppImage,tar.gz,deb}
 ```
 
 Releases are built by GitHub Actions on every `v*` tag. Maintainers: see [docs/setup.md#maintainers](docs/setup.md#maintainers) for the release and key-rotation workflows.

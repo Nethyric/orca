@@ -91,6 +91,22 @@ const req = (port, pathname, opts = {}) => new Promise((resolve) => {
     check('preview-rebind-host-blocked', reb.status === 403, 'status=' + reb.status);
   }
 
+  // ---- 6) symlink escape: a link inside the workspace must not expose files outside it (S2) ----
+  const ws = config.workspaceDir();
+  const link = path.join(ws, 'escape-link');
+  try { fs.rmSync(link, { force: true }); fs.symlinkSync(process.platform === 'win32' ? process.env.SystemRoot || 'C:\\Windows' : '/etc', link); } catch (_) {}
+  const sym = await tools.callTool('read_file', { path: 'escape-link/' + (process.platform === 'win32' ? 'win.ini' : 'passwd') });
+  check('symlink-escape-blocked', !!sym.error && /escapes workspace/.test(sym.error), JSON.stringify(sym).slice(0, 90));
+  try { fs.rmSync(link, { force: true }); } catch (_) {}
+
+  // ---- 7) SSRF: agent HTTP tools refuse loopback / link-local / private destinations (S3) ----
+  for (const u of ['http://127.0.0.1:' + port + '/api/chats', 'http://169.254.169.254/latest/meta-data/', 'http://192.168.1.1/', 'http://[::1]:80/']) {
+    const r = await tools.callTool('http_request', { url: u });
+    check('ssrf-blocked ' + u.slice(0, 34), !!r.error && /refused|allowed/.test(r.error), JSON.stringify(r).slice(0, 80));
+  }
+  const fp = await tools.callTool('fetch_page', { url: 'http://127.0.0.1:' + port + '/' });
+  check('ssrf-blocked fetch_page', !!fp.error && /refused/.test(fp.error), JSON.stringify(fp).slice(0, 80));
+
   try { server.close(); if (server.previewServer) server.previewServer.close(); } catch (_) {}
   console.log(fail === 0 ? 'ALL HARDENING TESTS PASS' : `${fail} HARDENING TEST(S) FAILED`);
   process.exit(fail === 0 ? 0 : 1);

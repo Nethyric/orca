@@ -596,8 +596,9 @@ function makeTools({ safe, rel, WS }) {
     hits.sort((a, b) => b.mtime - a.mtime);
     return { count: hits.length, files: hits.slice(0, limit).map((h) => `${h.path} (${h.bytes}B)`), truncated: hits.length > limit };
   }
-  async function grep({ pattern, path: p = '.', glob: g = '', context = 0, max_results = 80, case_sensitive = false }) {
+  async function grep({ pattern, path: p = '.', glob: g = '', context = 0, max_results = 80, case_sensitive = false, word = false }) {
     if (!pattern) return { error: 'pattern is required' };
+    if (word) pattern = '\\b(?:' + pattern + ')\\b';
     let re; try { re = new RegExp(pattern, case_sensitive ? '' : 'i'); } catch (e) { return { error: 'bad regex: ' + e.message }; }
     const root = safe(p); const gre = g ? globToRe(g) : null; const hits = []; let scanned = 0;
     walk(root, (fp) => {
@@ -611,6 +612,31 @@ function makeTools({ safe, rel, WS }) {
       for (let i = 0; i < lines.length && hits.length < max_results; i++) if (re.test(lines[i])) hits.push({ file: rel(fp), line: i + 1, text: lines[i].trim().slice(0, 240), ...(context ? { before: lines.slice(Math.max(0, i - context), i).map((l) => l.slice(0, 200)), after: lines.slice(i + 1, i + 1 + context).map((l) => l.slice(0, 200)) } : {}) });
     });
     return { count: hits.length, scanned_files: scanned, matches: hits, truncated: hits.length >= max_results };
+  }
+  // ---- code_refs: definition + every reference of a symbol (safe renames/refactors) ----
+  async function codeRefs({ symbol, path: p = '.', max = 40 }) {
+    if (!symbol) return { error: 'symbol is required' };
+    const sym = String(symbol).trim(); if (!/^[A-Za-z_$][\w$]*$/.test(sym)) return { error: 'symbol must be a plain identifier' };
+    const root = safe(p);
+    const defRe = new RegExp(`(^|[^\\w$.])(?:export\\s+)?(?:default\\s+)?(?:async\\s+)?(?:function\\s+\\*?\\s*${sym}\\b|class\\s+${sym}\\b|(?:const|let|var)\\s+${sym}\\s*=|def\\s+${sym}\\b|type\\s+${sym}\\b|interface\\s+${sym}\\b)`);
+    const refRe = new RegExp(`\\b${sym}\\b`);
+    const exts = /\.(js|mjs|cjs|ts|tsx|py|go|rs|java)$/i;
+    let definition = null; const references = []; let files = 0;
+    walk(root, (fp) => {
+      if (!exts.test(fp) || references.length >= max) return;
+      let st; try { st = fs.statSync(fp); } catch (_) { return; } if (st.size > 1e6) return;
+      let txt; try { txt = fs.readFileSync(fp, 'utf8'); } catch (_) { return; } if (txt.includes('\u0000')) return;
+      files++;
+      const rl = path.relative(root, fp).replace(/\\/g, '/');
+      const ls = txt.split('\n');
+      for (let i = 0; i < ls.length; i++) {
+        if (!refRe.test(ls[i])) continue;
+        const hit = { file: rl, line: i + 1, text: ls[i].trim().slice(0, 160) };
+        if (!definition && defRe.test(ls[i])) { definition = hit; hit.kind = 'definition'; }
+        if (references.length < max) references.push(hit);
+      }
+    });
+    return { symbol: sym, definition, references, count: references.length, files_scanned: files, truncated: references.length >= max };
   }
   // ---- todo list (per chat; the UI renders it live) ----
   const todos = new Map(); // chatId -> [{id,text,status}]
@@ -626,6 +652,126 @@ function makeTools({ safe, rel, WS }) {
     return { ok: true, todos: cur, _todos: cur };
   }
   async function todoRead() { return { todos: loadTodos(currentChat) }; }
+  // ---- repo map: dependency-free structural orientation (tree + top-level symbols) ----
+  const MAP_SKIP = new Set(['node_modules', '.git', 'dist', 'build', '.next', '.nuxt', '.venv', 'venv', '__pycache__', 'coverage', '.orca', 'attachments', 'downloads', '.cache', 'target', 'out']);
+  function codeMap(root, maxFiles = 90, maxChars = 2600, query = '') {
+    const tree = []; const outlines = []; let count = 0; let overflow = false;
+    const codeRel = new Set(); const imports = []; const fileSigs = [];
+    const walkM = (dir, depth) => {
+      let ents; try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch (_) { return; }
+      ents.sort((a, b) => (a.isDirectory() === b.isDirectory() ? a.name.localeCompare(b.name) : a.isDirectory() ? -1 : 1));
+      for (const e of ents) {
+        if (MAP_SKIP.has(e.name) || (e.name.startsWith('.') && e.name !== '.env.example')) continue;
+        const fp = path.join(dir, e.name); const relp = path.relative(root, fp).split(/[\\/]/).join('/');
+        if (e.isDirectory()) { if (depth < 3) { tree.push(relp + '/'); walkM(fp, depth + 1); } continue; }
+        if (count >= maxFiles) { overflow = true; continue; }
+        count++; tree.push(relp);
+        const ext = path.extname(e.name).toLowerCase();
+        const isCode = ['.js', '.mjs', '.cjs', '.ts', '.py'].includes(ext);
+        let src = '';
+        if (isCode) {
+          codeRel.add(relp.replace(/\.(js|mjs|cjs|ts|py)$/, ''));
+          try { src = fs.readFileSync(fp, 'utf8'); } catch (_) { src = ''; }
+          if (src && src.length <= 400000) {
+            const specs = [];
+            if (ext === '.py') { for (const m of src.matchAll(/^(?:from|import)\s+([A-Za-z_][\w.]*)/gm)) specs.push(m[1]); }
+            else { for (const m of src.matchAll(/(?:from|import|require\()\s*['"]([^'"\n]+)['"]/g)) if (m[1].startsWith('.')) specs.push(m[1]); }
+            if (specs.length) imports.push({ dir: relp.split('/').slice(0, -1).join('/'), specs });
+          }
+        }
+        if (isCode && src && src.length <= 400000) {
+          const sigs = [];
+          for (const l of src.split('\n')) {
+            if (sigs.length >= 9) break;
+            if (l.length > 130) continue;
+            const m = ext === '.py' ? l.match(/^(?:async )?def ([A-Za-z_]\w*)|^class ([A-Za-z_]\w*)/) : l.match(/^export (?:default )?(?:async )?function ([A-Za-z_$][\w$]*)|^export class ([A-Za-z_$][\w$]*)|^(?:async )?function ([A-Za-z_$][\w$]*)|^class ([A-Za-z_$][\w$]*)|^(?:const|let|var) ([A-Za-z_$][\w$]*) = (?:\([^)]*\)|[A-Za-z_$][\w$]*) =>/);
+            if (m) sigs.push(m[1] || m[2] || m[3] || m[4] || m[5]);
+          }
+          if (sigs.length) fileSigs.push({ relp, sigs });
+        }
+      }
+    };
+    walkM(root, 0);
+    // import graph: which local modules do other files depend on most (RepoGraph-style hubs)
+    const refCount = new Map();
+    for (const im of imports) for (const s of im.specs) {
+      const key = s.startsWith('.') ? path.posix.normalize(path.posix.join(im.dir || '.', s)).replace(/\/+$/, '') : s.replace(/\./g, '/');
+      for (const cand of [key, key + '/index']) if (codeRel.has(cand)) { refCount.set(cand, (refCount.get(cand) || 0) + 1); break; }
+    }
+    const hubs = [...refCount.entries()].filter(([, n]) => n >= 2).sort((a, b) => b[1] - a[1]).slice(0, 6);
+    // query-aware ranking (aider/goldfish-style personalization): files whose symbols/names match the task rank first
+    const qtok = String(query || '').toLowerCase().split(/[^a-z0-9_$]+/).filter((t) => t.length >= 3);
+    let focus = '';
+    if (qtok.length) {
+      const scored = [];
+      for (const f of fileSigs) {
+        const base = f.relp.split('/').pop().toLowerCase();
+        let sc = 0; const matched = [];
+        for (const t of qtok) {
+          if (base.replace(/\.(js|mjs|cjs|ts|py)$/, '').includes(t)) sc += 1;
+          for (const s of f.sigs) if (s.toLowerCase().includes(t)) { sc += 2; if (!matched.includes(s)) matched.push(s); }
+        }
+        if (sc > 0) scored.push({ ...f, sc, matched });
+      }
+      scored.sort((a, b) => b.sc - a.sc);
+      const top = scored.slice(0, 6);
+      if (top.length) focus = 'focus (task-relevant — read/edit these first):\n' + top.map((f) => `${f.relp} → ${f.matched.slice(0, 4).join(', ')}`).join('\n');
+      const picked = new Set(scored.map((f) => f.relp));
+      const ranked = [...scored, ...fileSigs.filter((f) => !picked.has(f.relp))];
+      for (const f of ranked.slice(0, 14)) outlines.push(f.relp + ': ' + f.sigs.join(', '));
+    } else {
+      for (const f of fileSigs.slice(0, 14)) outlines.push(f.relp + ': ' + f.sigs.join(', '));
+    }
+    if (overflow) tree.push('… (more files — use repo_map with a path filter or grep)');
+    let map = tree.join('\n');
+    if (focus) map += '\n\n' + focus;
+    if (outlines.length) map += '\n\nsymbols:\n' + outlines.join('\n');
+    if (hubs.length) map += '\n\nhubs (most-imported local modules — read these first to understand the core):\n' + hubs.map(([k, n]) => `${k} (${n}×)`).join(', ');
+    if (map.length > maxChars) map = map.slice(0, maxChars) + '\n… (truncated — repo_map with a path filter, or grep)';
+    return { files: count, map };
+  }
+  async function repoMapTool({ path: p, files, query } = {}) {
+    const root = p ? safe(p) : WS();
+    if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) return { error: 'not a folder: ' + p };
+    const r = codeMap(root, Math.min(files || 90, 400), 6000, query || '');
+    return { root: p || '.', files: r.files, map: r.map };
+  }
+  // ---- run_tests: detect the project's suite, run it, failures first ----
+  function detectPy() { for (const c of isWin ? ['python', 'py -3', 'python3'] : ['python3', 'python']) { try { execSync(`${c} --version`, { stdio: 'pipe', windowsHide: true }); return c; } catch (_) {} } return null; }
+  async function runTests({ timeout = 240, filter } = {}) {
+    const root = WS();
+    let label = '', cmd = '', args = [];
+    const pkgF = path.join(root, 'package.json');
+    if (fs.existsSync(pkgF)) { try { const pkg = JSON.parse(fs.readFileSync(pkgF, 'utf8')); if (pkg.scripts && pkg.scripts.test && String(pkg.scripts.test).trim()) { label = 'npm test'; cmd = isWin ? 'npm.cmd' : 'npm'; args = ['test', '--silent']; if (filter) args.push('--', filter); } } catch (_) {} }
+    if (!cmd) {
+      const py = detectPy();
+      const hasPy = py && (['pytest.ini', 'setup.py', 'pyproject.toml', 'tox.ini'].some((f) => fs.existsSync(path.join(root, f))) || (() => { let f = false; walk(root, (x) => { if (!f && /(^|[\\/])(test_[^\\/]+|[^\\/]+_test)\.py$/.test(x)) f = true; }, 1500); return f; })());
+      if (hasPy) {
+        const parts = py.split(' '); let usePytest = true;
+        try { execSync(`${py} -c "import pytest"`, { stdio: 'pipe', windowsHide: true }); } catch (_) { usePytest = false; }
+        if (usePytest) { label = 'pytest'; cmd = parts[0]; args = [...parts.slice(1), '-m', 'pytest', '-q']; if (filter) args.push('-k', filter); }
+        else { label = 'unittest'; cmd = parts[0]; args = [...parts.slice(1), '-m', 'unittest', 'discover', '-q']; }
+      }
+    }
+    if (!cmd && fs.existsSync(path.join(root, 'Cargo.toml'))) { label = 'cargo test'; cmd = 'cargo'; args = ['test', '-q']; if (filter) args.push(filter); }
+    if (!cmd && fs.existsSync(path.join(root, 'go.mod'))) { label = 'go test'; cmd = 'go'; args = ['test', './...']; if (filter) args.push('-run', filter); }
+    if (!cmd) return { error: 'no test setup detected (package.json scripts.test, pytest, cargo test, go test). Run the suite via run_shell, or add tests first.' };
+    const t0 = Date.now();
+    const r = await run(cmd, args, { cwd: root, timeout: Math.min(timeout || 240, 600) });
+    const ms = Date.now() - t0; const out = String(r.out || '');
+    if (r.code === 0) return { ok: true, label, ms, summary: (out.match(/\d+ (?:passing|passed|ok\b)[^\n]*/i) || [])[0] || out.trim().split('\n').slice(-2).join(' ').slice(0, 300), output: out.slice(-1200) };
+    const lines = out.split('\n'); const keep = new Set();
+    lines.forEach((l, i) => { if (/FAIL|ERROR|Error|error:|panic|✗|×|\bfailed\b/i.test(l)) for (let k = Math.max(0, i - 2); k < Math.min(lines.length, i + 12); k++) keep.add(k); });
+    const focused = keep.size ? [...keep].sort((a, b) => a - b).map((i) => lines[i]).join('\n') : lines.slice(-40).join('\n');
+    // exact jump points: file:line pairs inside the failure window (skip dependency paths)
+    const failing_at = [];
+    for (const m of focused.matchAll(/([A-Za-z0-9_.@/-]+\.(?:js|mjs|cjs|ts|tsx|py|go|rs))(?::(\d+))?/g)) {
+      const f = m[1].replace(/\\/g, '/'); if (/node_modules|site-packages|\/\.cache|vendor\//.test(f)) continue;
+      const key = f + (m[2] ? ':' + m[2] : ''); if (!failing_at.includes(key)) failing_at.push(key);
+      if (failing_at.length >= 8) break;
+    }
+    return { ok: false, label, ms, exit_code: r.code, failures: focused.slice(0, 6000), failing_at, tail: out.slice(-1500), hint: 'fix the root cause and re-run run_tests (same command) before answering' };
+  }
   // ---- diagnostics (syntax check) ----
   async function diagnostics({ path: p }) {
     const files = [];
@@ -678,6 +824,7 @@ function makeTools({ safe, rel, WS }) {
   // ---- browser_check: load a page in headless Chrome, capture console errors + uncaught exceptions + a screenshot ----
   // Uses --remote-debugging-pipe? No: simplest robust path = Chrome's --dump-dom + --enable-logging to a file catches console.error/exceptions.
   async function browserCheck({ url, width = 1280, height = 800, wait_ms = 2500, output = 'screenshots/check.png', keys = [] }) {
+    width = Math.min(Math.max(Math.round(+width) || 1280, 320), 3840); height = Math.min(Math.max(Math.round(+height) || 800, 240), 3840); wait_ms = Math.min(Math.max(Math.round(+wait_ms) || 2500, 200), 15000);
     const bin = findChrome();
     if (!bin) return { ok: false, error: 'No Chrome/Edge/Chromium found on this machine — do a static check instead (node --check on scripts, matching tags/ids).' };
     let target = url;
@@ -710,6 +857,7 @@ f.addEventListener('load',()=>{try{hook(f.contentWindow)}catch(e){errs.push('no 
 
   // ---- screenshots of URLs / local HTML for the agent to inspect (via headless Chrome if present) ----
   async function screenshotUrl({ url, output = 'screenshots/page.png', width = 1280, height = 800, full_page = false }) {
+    width = Math.min(Math.max(Math.round(+width) || 1280, 320), 3840); height = Math.min(Math.max(Math.round(+height) || 800, 240), 3840);
     const dest = safe(output); fs.mkdirSync(path.dirname(dest), { recursive: true });
     const bin = findChrome();
     if (!bin) return { error: 'No Chrome/Edge found for screenshots.' };
@@ -743,11 +891,13 @@ f.addEventListener('load',()=>{try{hook(f.contentWindow)}catch(e){errs.push('no 
     social_trending: socialTrending,
     generate_image: generateImage,
     generate_video: generateVideo,
-    glob, grep,
+    glob, grep, code_refs: codeRefs,
     todo_write: todoWrite, todo_read: todoRead,
     diagnostics,
     project_init: projectInit,
     task,
+    repo_map: repoMapTool,
+    run_tests: runTests,
     async scaffold_site(args) { const r = require('./scaffold').scaffold({ ...args, root: WS() }); return { ...r, files: r.written.map((f) => (r.dir === '.' ? f : r.dir + '/' + f)) }; },
   };
   const SCHEMAS = [
@@ -761,14 +911,17 @@ f.addEventListener('load',()=>{try{hook(f.contentWindow)}catch(e){errs.push('no 
     { type: 'function', function: { name: 'generate_image', description: 'Generate (or edit) an image from a text prompt. Uses the Images API provider from Settings → Agent → Image generation when one is configured (OpenAI gpt-image, Routeway: FLUX 2 / Seedream / Imagen / Ideogram / Recraft …, Together, xAI …), otherwise the free built-in service. Pass image= to edit an existing picture (Images API providers only). Saves into workspace generated/ and returns the real provider/model used. Write prompts in English for best quality.', parameters: { type: 'object', properties: { prompt: { type: 'string' }, output: { type: 'string', description: 'e.g. generated/logo.png' }, width: { type: 'integer' }, height: { type: 'integer' }, seed: { type: 'integer' }, model: { type: 'string', description: 'provider model id (flux-2-flash, gpt-image-1, seedream-v4 …); free service: flux | turbo' }, count: { type: 'integer', description: '1-4' }, negative_prompt: { type: 'string' }, quality: { type: 'string', description: 'low | medium | high | auto (Images API)' }, image: { type: 'string', description: 'workspace path of a source image to edit' }, mask: { type: 'string', description: 'optional PNG mask for inpainting (transparent = edit here)' } }, required: ['prompt'] } } },
     { type: 'function', function: { name: 'generate_video', description: 'Generate a short video from a text prompt (optionally from a start image). With a provider configured in Settings → Agent → Video generation — OpenAI Sora (Videos API), Replicate or fal.ai — it produces real text-to-video; without a key it generates AI key-frames and animates them into an MP4 with ffmpeg and says so. Output in workspace generated/. The result reports which provider actually produced the file — never present the key-frame fallback as real AI video.', parameters: { type: 'object', properties: { prompt: { type: 'string' }, output: { type: 'string' }, duration: { type: 'number', description: 'seconds, default 5 (Sora: 4-20)' }, aspect_ratio: { type: 'string', enum: ['16:9', '9:16', '1:1'] }, image: { type: 'string', description: 'optional start image path' }, model: { type: 'string', description: 'sora-2 | sora-2-pro | a Replicate/fal model id' } }, required: ['prompt'] } } },
     { type: 'function', function: { name: 'glob', description: 'Find files by glob pattern (e.g. **/*.py, src/**/*.test.js), newest first.', parameters: { type: 'object', properties: { pattern: { type: 'string' }, path: { type: 'string' }, limit: { type: 'integer' } }, required: ['pattern'] } } },
-    { type: 'function', function: { name: 'grep', description: 'Fast regex search across file contents with optional glob filter and context lines. Prefer this over run_shell grep.', parameters: { type: 'object', properties: { pattern: { type: 'string' }, path: { type: 'string' }, glob: { type: 'string' }, context: { type: 'integer' }, max_results: { type: 'integer' }, case_sensitive: { type: 'boolean' } }, required: ['pattern'] } } },
+    { type: 'function', function: { name: 'grep', description: 'Fast regex search across file contents with optional glob filter and context lines. Prefer this over run_shell grep. word=true matches whole words only (use it to find every reference of a symbol before renaming it).', parameters: { type: 'object', properties: { pattern: { type: 'string' }, path: { type: 'string' }, glob: { type: 'string' }, context: { type: 'integer' }, max_results: { type: 'integer' }, case_sensitive: { type: 'boolean' }, word: { type: 'boolean', description: 'whole-word match (\\b…\\b)' } }, required: ['pattern'] } } },
+    { type: 'function', function: { name: 'code_refs', description: 'Find a symbol\'s definition and EVERY reference (file:line) across the workspace. Use it BEFORE renaming/moving/deleting a symbol so no call site is missed; pair with edit_file edits[] per file.', parameters: { type: 'object', properties: { symbol: { type: 'string', description: 'plain identifier, e.g. computeTotal' }, path: { type: 'string' }, max: { type: 'integer' } }, required: ['symbol'] } } },
     { type: 'function', function: { name: 'todo_write', description: 'Create/update the visible task checklist for this job (shown live to the user). Call it at the start of multi-step work with all steps, then mark each step in_progress/done as you go. merge=true updates individual items.', parameters: { type: 'object', properties: { todos: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, text: { type: 'string' }, status: { type: 'string', enum: ['pending', 'in_progress', 'done', 'cancelled'] } }, required: ['text'] } }, merge: { type: 'boolean' } }, required: ['todos'] } } },
     { type: 'function', function: { name: 'todo_read', description: 'Read the current task checklist.', parameters: { type: 'object', properties: {} } } },
     { type: 'function', function: { name: 'diagnostics', description: 'Syntax-check JS/Python/JSON files (whole workspace or a path) and list problems with line numbers. Run after writing code.', parameters: { type: 'object', properties: { path: { type: 'string' } } } } },
     { type: 'function', function: { name: 'project_init', description: 'Create ORCA.md project memory in the workspace (like AGENTS.md/CLAUDE.md): scanned structure + sections for commands, conventions, decisions. Then fill it in with edit_file. It is loaded automatically in every future chat.', parameters: { type: 'object', properties: { overwrite: { type: 'boolean' } } } } },
     { type: 'function', function: { name: 'task', description: 'Delegate a self-contained sub-task to a sub-agent with its own fresh context (e.g. "research X and report", "explore the codebase and summarize the architecture", "write and test module Y"). It has the same tools and returns a final report. Use for parallelizable or context-heavy work; call several in one turn to run them in parallel.', parameters: { type: 'object', properties: { description: { type: 'string', description: '3-6 word label' }, prompt: { type: 'string', description: 'complete, self-contained instructions' }, model: { type: 'string' }, max_steps: { type: 'integer' } }, required: ['description', 'prompt'] } } },
+    { type: 'function', function: { name: 'repo_map', description: 'Structural map of the workspace (file tree + top-level symbols of each code file) for fast orientation in an unfamiliar project — much cheaper than reading many files. Ranked by relevance when query is given: pass the task sentence and the map adds a "focus" section with the files/symbols that match it. Optional: path (subfolder), files (cap), query (task text).', parameters: { type: 'object', properties: { path: { type: 'string' }, files: { type: 'integer' }, query: { type: 'string', description: 'the task in one sentence — ranks the map by relevance' } } } } },
+    { type: 'function', function: { name: 'run_tests', description: "Detect and run the project's test suite (npm test / pytest / cargo test / go test) and return failures first with focused context. Run it after code changes and before answering; on failure fix the root cause and re-run the SAME command.", parameters: { type: 'object', properties: { timeout: { type: 'integer', description: 'seconds, default 240' }, filter: { type: 'string', description: 'only tests matching (pytest -k / npm test -- f / cargo test f / go -run)' } } } } },
   ];
-  return { impl, SCHEMAS, withGenOverride, setCurrentChat, projectMemory, loadTodos, setSubagentRunner: (fn) => { runSubagent = fn; }, analyzeImage, describeWithVision, findBin, visionModel, findChrome };
+  return { impl, SCHEMAS, withGenOverride, setCurrentChat, projectMemory, loadTodos, setSubagentRunner: (fn) => { runSubagent = fn; }, analyzeImage, describeWithVision, findBin, visionModel, findChrome, codeMap };
 }
 
 module.exports = { makeTools, findBin, UA };

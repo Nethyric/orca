@@ -358,9 +358,12 @@ async function applyUpdateOnce(onProgress) {
       const script = path.join(dir, 'apply-update.ps1'); fs.writeFileSync(script, '\uFEFF' + ps, 'utf8');
       const psOk = await detach(PS, ['-NoProfile', '-ExecutionPolicy', 'Bypass', ...(process.platform === 'win32' ? ['-WindowStyle', 'Hidden'] : []), '-File', script], { cwd: dir });
       if (!psOk) { // PowerShell missing/blocked → cmd fallback
+        // S11: cmd.exe expands %VAR% even inside quotes and " ends the quoted section, so paths are
+        // sanitized (quotes dropped, % doubled) before being embedded in the fallback script.
+        const cq = (v) => String(v).replace(/["\r\n]/g, '').replace(/%/g, '%%');
         const bat = [`@echo off`, `:w`, `tasklist /FI "PID eq ${process.pid}" 2>NUL | find "${process.pid}" >NUL && (timeout /t 1 /nobreak >NUL & goto w)`, `timeout /t 1 /nobreak >NUL`,
-          `rd /s /q "${oldRoot}" 2>NUL`, `ren "${root}" "${path.basename(oldRoot)}" || (robocopy "${newRoot}" "${root}" /E /MOVE /NFL /NDL /NJH /NJS >NUL & goto run)`, `move /y "${newRoot}" "${root}" >NUL`,
-          `:run`, `del /q "${pend.zip}" "${pendingPath()}" 2>NUL`, `start "" "${relaunch}"`, `timeout /t 3 /nobreak >NUL & rd /s /q "${oldRoot}" 2>NUL & rd /s /q "${stage}" 2>NUL`].join('\r\n');
+          `rd /s /q "${cq(oldRoot)}" 2>NUL`, `ren "${cq(root)}" "${cq(path.basename(oldRoot))}" || (robocopy "${cq(newRoot)}" "${cq(root)}" /E /MOVE /NFL /NDL /NJH /NJS >NUL & goto run)`, `move /y "${cq(newRoot)}" "${cq(root)}" >NUL`,
+          `:run`, `del /q "${cq(pend.zip)}" "${cq(pendingPath())}" 2>NUL`, `start "" "${cq(relaunch)}"`, `timeout /t 3 /nobreak >NUL & rd /s /q "${cq(oldRoot)}" 2>NUL & rd /s /q "${cq(stage)}" 2>NUL`].join('\r\n');
         const b = path.join(dir, 'apply-update.cmd'); fs.writeFileSync(b, bat);
         if (!(await detach((TEST && TEST.cmd) || 'cmd.exe', ['/c', b], { cwd: dir }))) throw new Error('could not start the install helper (PowerShell and cmd both unavailable)');
       }

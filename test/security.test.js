@@ -47,9 +47,15 @@ const req = (port, pathname, opts = {}) => new Promise((resolve) => {
   const d = await req(port, '/api/chats', { headers: { authorization: 'Bearer ' + TOKEN } });
   check('token-bearer-ok', d.status === 200, `status=${d.status}`);
 
-  // 5) valid token via query (?token=, EventSource style) → 200
+  // 5) the token in a query string is accepted ONLY on the SSE endpoint (EventSource cannot set
+  //    headers); everywhere else it is refused so it cannot leak into logs/history/Referer.
   const e = await req(port, '/api/chats?token=' + TOKEN);
-  check('token-query-ok', e.status === 200, `status=${e.status}`);
+  check('token-query-refused-off-sse', e.status === 401, `status=${e.status}`);
+  const e2 = await new Promise((resolve) => {
+    const r = http.request({ host: '127.0.0.1', port, path: '/api/events?token=' + TOKEN, method: 'GET' }, (res) => { resolve({ status: res.statusCode }); res.destroy(); });
+    r.on('error', () => resolve({ status: 0 })); r.end();
+  });
+  check('token-query-ok-on-sse', e2.status === 200, `status=${e2.status}`);
 
   // 6) cross-origin with a valid token → 403
   const f = await req(port, '/api/chats', { headers: { origin: 'https://evil.example', 'x-orca-token': TOKEN } });
@@ -72,9 +78,18 @@ const req = (port, pathname, opts = {}) => new Promise((resolve) => {
   const j = await req(port, '/api/chats', { headers: { host: 'evil.example', 'x-orca-token': TOKEN } });
   check('rebind-host-blocked', j.status === 403, `status=${j.status}`);
 
-  // 11) index.html carries the injected token so the real UI keeps working
+  // 11) a loopback browser gets the token embedded (and as an HttpOnly cookie) so the real UI works
   const k = await req(port, '/');
-  check('token-injected', k.status === 200 && k.body.includes(`window.__ORCA_TOKEN__='${TOKEN}'`), `status=${k.status} injected=${k.body.includes(TOKEN)}`);
+  check('token-injected-loopback', k.status === 200 && k.body.includes(`window.__ORCA_TOKEN__='${TOKEN}'`), `status=${k.status} injected=${k.body.includes(TOKEN)}`);
+  check('token-cookie-httponly', String(k.headers['set-cookie'] || '').includes('HttpOnly') && String(k.headers['set-cookie'] || '').includes('SameSite=Strict'), String(k.headers['set-cookie'] || ''));
+  // 11b) on a 0.0.0.0 bind a peer's Host must NOT receive the embedded token (S1)
+  const lan = await listen(0, '0.0.0.0');
+  const k2 = await req(lan.port, '/', { headers: { host: '192.168.1.20:' + lan.port } });
+  check('token-not-injected-for-lan', k2.status === 200 && k2.body.includes("window.__ORCA_TOKEN__=''") && !k2.body.includes(TOKEN), `status=${k2.status} leaked=${k2.body.includes(TOKEN)}`);
+  // …while the owner on loopback still gets it from the same server
+  const k3 = await req(lan.port, '/', { headers: { host: 'localhost:' + lan.port } });
+  check('token-injected-for-owner-on-lan-bind', k3.status === 200 && k3.body.includes(TOKEN), `status=${k3.status}`);
+  try { lan.server.close(); } catch (_) {}
 
   try { server.close(); } catch (_) {}
   console.log(fail === 0 ? 'ALL SECURITY TESTS PASS' : `${fail} SECURITY TEST(S) FAILED`);

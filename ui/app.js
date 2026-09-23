@@ -6,7 +6,7 @@ const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const el = (tag, cls, html) => { const e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; };
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const ico = (name, cls = '') => `<svg class="${cls}"><use href="#i-${name}"/></svg>`;
-const TOK = window.__ORCA_TOKEN__ || '';
+const TOK = (() => { const t0 = window.__ORCA_TOKEN__ || ''; if (t0 && t0 !== '__ORCA_TOKEN__') return t0; const q = new URLSearchParams(location.search).get('token'); if (q) { try { sessionStorage.setItem('orca.token', q); } catch (_) {} history.replaceState(null, '', location.pathname); return q; } try { return sessionStorage.getItem('orca.token') || ''; } catch (_) { return ''; } })();
 // Isolated preview origin (separate port serving ONLY static workspace files, no API, no token).
 // Previewed agent-generated HTML must never share the app's origin, or it could read the API token.
 const PREV_PORT = parseInt(window.__ORCA_PREVIEW__, 10) || 0;
@@ -32,8 +32,6 @@ const tu = (k) => (I18N[lang].upd[k] ?? I18N.en.upd[k] ?? k);
 const isFa = () => lang === 'fa';
 function applyLang() {
   root.lang = lang === 'zh' ? 'zh-CN' : lang; root.dir = RTL[lang] ? 'rtl' : 'ltr'; root.dataset.lang = lang;
-  $('#tb-lang').textContent = LANGS.find(([k]) => k === lang)?.[1] || lang.toUpperCase();
-  $('#tb-lang').dataset.tip = ts('lang');
   $$('[data-i18n]').forEach((e) => (e.textContent = t(e.dataset.i18n)));
   $$('[data-i18n-ph]').forEach((e) => (e.placeholder = t(e.dataset.i18nPh)));
   $('#cmdk-input').placeholder = t('cmdPh');
@@ -73,7 +71,7 @@ function md(text, live = false) {
     const langName = (code.className.match(/language-([\w+-]+)/) || [])[1] || '';
     try { if (!live && code.textContent.length < 30000) hljs.highlightElement(code); } catch (_) {} // highlight once, when the answer is final
     const head = el('div', 'pre-head', `<span>${esc(langName || 'text')}</span><span class="ph-btns"><button class="ph-open" title="${t('openInPanel')}">${ico('panel-r')}</button><button class="ph-dl" title="${t('download')}">${ico('download')}</button><button class="ph-copy">${ico('copy')}<span>${t('copy')}</span></button></span>`);
-    $('.ph-copy', head).onclick = (e) => { e.stopPropagation(); navigator.clipboard.writeText(code.textContent); const s = $('span', e.currentTarget); s.textContent = t('copied'); setTimeout(() => (s.textContent = t('copy')), 1200); };
+    $('.ph-copy', head).onclick = async (e) => { e.stopPropagation(); const ok = await copyText(code.textContent); const s = $('span', e.currentTarget); s.textContent = ok ? t('copied') : t('copyFail'); setTimeout(() => (s.textContent = t('copy')), 1400); };
     $('.ph-dl', head).onclick = (e) => { e.stopPropagation(); const ext = { javascript: 'js', typescript: 'ts', python: 'py', html: 'html', css: 'css', json: 'json', bash: 'sh', shell: 'sh', markdown: 'md' }[langName] || langName || 'txt'; dl('snippet.' + ext, code.textContent); };
     $('.ph-open', head).onclick = (e) => { e.stopPropagation(); openPanel(); showTab('preview'); previewText('snippet.' + (langName || 'txt'), code.textContent, langName); };
     pre.prepend(head);
@@ -90,7 +88,39 @@ const detectDir = (s) => (/[\u0600-\u06FF]/.test(String(s).slice(0, 300)) ? 'rtl
 // ───────────────────────── state ─────────────────────────
 const S = { webMode: false, cfg: null, chats: [], chat: null, mode: 'direct', planMode: false, autonomy: 'auto', running: new Map(), lanes: new Map(), attach: [], allowAll: false, regenFrom: null, stepCount: 0 };
 const toast = (m, k = '') => { const d = el('div', 'toast ' + k, (k === 'ok' ? ico('check') : k === 'err' ? ico('x') : '') + `<span>${esc(m)}</span>`); $('#toasts').appendChild(d); setTimeout(() => d.remove(), 3200); };
+// Copy that survives hostile embeds: Clipboard API first, execCommand fallback, honest feedback.
+const copyText = async (txt) => { try { await navigator.clipboard.writeText(txt); return true; } catch (_) {} try { const ta = el('textarea'); ta.value = txt; ta.setAttribute('readonly', ''); ta.style.cssText = 'position:fixed;top:-1000px;left:-1000px;opacity:0'; document.body.appendChild(ta); ta.select(); ta.setSelectionRange(0, txt.length); const ok = document.execCommand('copy'); ta.remove(); return ok; } catch (_) { return false; } };
+const copyFeedback = async (txt) => { if (await copyText(txt)) toast(t('copied'), 'ok'); else toast(t('copyFail'), 'err'); };
 const modelOf = (key) => S.cfg?.models.find((x) => x.key === key);
+// ── brand marks (simple-icons CC0 paths in brands.js; monogram fallback) ──
+const BRANDS = window.ORCA_BRANDS || {};
+const BRAND_RULES = [[/openai|gpt-|chatgpt/, 'openai'], [/anthropic|claude/, 'anthropic'], [/google|gemini|bard/, 'google'], [/meta|llama/, 'meta'], [/mistral/, 'mistralai'], [/minimax|abab/, 'minimax'], [/deepseek/, 'deepseek'], [/qwen|alibaba|dashscope|tongyi/, 'qwen'], [/moonshot|kimi/, 'kimi'], [/perplexity/, 'perplexity'], [/hugging|hf-/, 'huggingface'], [/openrouter/, 'openrouter'], [/nvidia/, 'nvidia'], [/amazon|aws|bedrock/, 'amazon'], [/microsoft|azure/, 'microsoft'], [/ollama/, 'ollama']];
+const brandHue = (str) => { let h = 0; for (const ch of String(str)) h = (h * 31 + ch.charCodeAt(0)) % 360; return h; };
+// official brand hex → a legible variant for dark themes (lift lightness of dark colors, like brands' own dark-mode logos)
+const brandDark = (hex) => {
+  const n = parseInt(hex, 16); let r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+  const mx = Math.max(r, g, b) / 255, mn = Math.min(r, g, b) / 255; const l = (mx + mn) / 2;
+  if (l >= 0.45) return '#' + hex;
+  const hsl = (() => { r /= 255; g /= 255; b /= 255; const max = Math.max(r, g, b), min = Math.min(r, g, b); let h = 0, s = 0; const ll = (max + min) / 2; const d = max - min; if (d) { s = d / (1 - Math.abs(2 * ll - 1)); switch (max) { case r: h = ((g - b) / d) % 6; break; case g: h = (b - r) / d + 2; break; default: h = (r - g) / d + 4; } h = Math.round(h * 60); if (h < 0) h += 360; } return [h, s, ll]; })();
+  const [h, s] = hsl; const L = 0.68, S = Math.min(s, 0.85);
+  const c = (1 - Math.abs(2 * L - 1)) * S, x = c * (1 - Math.abs(((h / 60) % 2) - 1)), m = L - c / 2;
+  const seg = [[c, x, 0], [x, c, 0], [0, c, x], [0, x, c], [x, 0, c], [c, 0, x]][Math.min(5, Math.floor(h / 60))];
+  return '#' + seg.map((v) => Math.round((v + m) * 255).toString(16).padStart(2, '0')).join('');
+};
+const brandMark = (m, cls = '') => {
+  const k = String(m?.key || '');
+  const lbl = esc(m?.vendor || m?.label || m?.provider || '');
+  if (k === 'auto' || /orca/i.test(String(m?.vendor || ''))) return `<img class="brand-img ${cls}" src="/assets/logo.png" alt="ORCA"${lbl ? ` title="${lbl}"` : ''}>`;
+  // custom logo set by the user for a provider (or model) — any future brand gets its real logo this way
+  const logo = m?.logo || S.cfg?.providers?.[m?.provider]?.logo || '';
+  if (logo && /^(https?:\/\/|data:image\/)/i.test(logo)) return `<img class="brand-img ${cls}" src="${esc(logo)}" alt="${lbl}"${lbl ? ` title="${lbl}"` : ''}>`;
+  const hay = [m?.vendor, m?.provider, m?.label, k].join(' ').toLowerCase();
+  let slug = ''; for (const [re, sl] of BRAND_RULES) if (re.test(hay)) { slug = sl; break; }
+  const B = slug && BRANDS[slug];
+  if (B) { const c = '#' + (B.c || '000000'); return `<svg class="brand ${cls}" viewBox="0 0 24 24" role="img" aria-label="${lbl}" style="--bc:${c};--bcd:${brandDark(B.c || '000000')}"${lbl ? ` title="${lbl}"` : ''}><path d="${B.d}"/></svg>`; }
+  const ch = String(m?.label || m?.vendor || m?.provider || '?').trim()[0] || '?';
+  return `<span class="brand-m ${cls}" style="--h:${brandHue(hay || ch)}"${lbl ? ` title="${lbl}"` : ''}>${esc(ch.toUpperCase())}</span>`;
+};
 
 // tooltips
 const tip = $('#tip');
@@ -98,16 +128,43 @@ document.addEventListener('mouseover', (e) => { const b = e.target.closest('[dat
 document.addEventListener('mousedown', () => tip.classList.remove('show'));
 
 // ───────────────────────── model pickers ─────────────────────────
+function closeModelMenu() { const m = $('#pk-menu'); if (!m) return; if (m._key) document.removeEventListener('keydown', m._key); m.remove(); }
+function openModelMenu(anchor, value, onChange) {
+  closeModelMenu();
+  const menu = el('div', 'pk-menu'); menu.id = 'pk-menu'; menu.setAttribute('role', 'listbox');
+  const groups = new Map();
+  for (const x of S.cfg.models) { const g = x.provider || x.vendor || 'ORCA'; if (!groups.has(g)) groups.set(g, []); groups.get(g).push(x); }
+  for (const [g, list] of groups) {
+    menu.appendChild(el('div', 'pk-group', esc(g)));
+    for (const x of list) {
+      const row = el('button', 'pk-item' + (x.key === value ? ' sel' : ''));
+      row.setAttribute('role', 'option'); row.setAttribute('aria-selected', x.key === value ? 'true' : 'false');
+      row.innerHTML = `<span class="pk-i-top">${brandMark(x)}<span class="pk-i-label">${esc(x.label)}</span>${x.tier ? `<em class="pk-i-tier">${esc(t('tier')[x.tier] || '')}</em>` : ''}${x.key === value ? ico('check', 'pk-i-check') : ''}</span><span class="pk-i-sub">${esc(x.note?.[lang] || x.vendor || '')}</span>`;
+      row.onclick = (e) => { e.stopPropagation(); closeModelMenu(); buildPicker(anchor, x.key, onChange); onChange(x.key); };
+      menu.appendChild(row);
+    }
+  }
+  document.body.appendChild(menu);
+  const r = anchor.getBoundingClientRect(); const mw = menu.offsetWidth; const mh = menu.offsetHeight;
+  menu.style.left = Math.min(Math.max(8, r.left), innerWidth - mw - 8) + 'px';
+  menu.style.top = (r.bottom + 6 + mh > innerHeight - 8 ? Math.max(8, r.top - mh - 6) : r.bottom + 6) + 'px';
+  const items = $$('.pk-item', menu); let i = Math.max(0, items.findIndex((x) => x.classList.contains('sel')));
+  menu._key = (e) => {
+    if (e.key === 'Escape') { closeModelMenu(); anchor.focus(); }
+    else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); e.stopPropagation(); i = (i + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length; items.forEach((x, k) => x.classList.toggle('hov', k === i)); items[i].scrollIntoView({ block: 'nearest' }); }
+    else if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); items[i].click(); }
+  };
+  document.addEventListener('keydown', menu._key, true);
+  setTimeout(() => document.addEventListener('click', closeModelMenu, { once: true }), 0);
+}
 function buildPicker(container, value, onChange) {
   container.innerHTML = '';
   const m = modelOf(value) || S.cfg.models[0];
-  container.append(el('span', 'pk-dot'), el('span', 'pk-label', esc(m?.label || value)), el('span', 'pk-tier', m ? esc(t('tier')[m.tier] || '') : ''), el('span', 'pk-chev', ico('chev')));
-  const sel = el('select');
-  sel.innerHTML = S.cfg.models.map((x) => `<option value="${x.key}">${esc(x.label)} — ${esc(x.note?.[lang] || x.vendor || x.provider)}</option>`).join('');
-  sel.value = m?.key || value;
-  sel.onchange = () => { buildPicker(container, sel.value, onChange); onChange(sel.value); };
-  container.appendChild(sel);
-  container.value = sel.value;
+  container.append(el('span', 'pk-brand', brandMark(m)), el('span', 'pk-label', esc(m?.label || value)), el('span', 'pk-tier', m ? esc(t('tier')[m.tier] || '') : ''), el('span', 'pk-chev', ico('chev')));
+  container.tabIndex = 0; container.setAttribute('role', 'button'); container.setAttribute('aria-haspopup', 'listbox');
+  container.onclick = (e) => { e.stopPropagation(); openModelMenu(container, container.value, onChange); };
+  container.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openModelMenu(container, container.value, onChange); } };
+  container.value = m?.key || value;
 }
 async function loadConfig() {
   S.cfg = await api('/api/config');
@@ -185,7 +242,7 @@ function renderUser(m) {
   const files = m.files || [...String(m.content || '').matchAll(/<attached_file name="([^"]+)"/g)].map((x) => x[1]);
   if (files.length) { const f = el('div', 'files'); files.forEach((n) => f.appendChild(el('span', 'filechip', ico('file') + esc(n)))); w.appendChild(f); }
   const tools = el('div', 'msg-tools');
-  const cp = el('button', '', ico('copy') + t('copy')); cp.onclick = () => { navigator.clipboard.writeText(shown); toast(t('copied'), 'ok'); };
+  const cp = el('button', '', ico('copy') + t('copy')); cp.onclick = () => copyFeedback(shown);
   const ed = el('button', '', ico('edit') + t('edit')); ed.onclick = () => { $('#input').value = shown; autosize(); $('#input').focus(); S.regenFrom = m.id; };
   const rg = el('button', '', ico('refresh') + t('regen')); rg.onclick = () => send(m.content, m.id);
   const pn = el('button', m.pinned ? 'on' : '', ico('pin') + (m.pinned ? t('unpin') : t('pin'))); pn.onclick = () => togglePinMsg(m);
@@ -216,13 +273,13 @@ async function deleteMsg(id) {
 function laneEl(m, anon, idx) {
   const lane = el('div', 'lane'); lane.dataset.mid = m.id;
   const info = modelOf(m.modelKey);
-  const name = anon ? `${t(idx === 0 ? 'modelA' : 'modelB')} <span class="anon">?</span>` : `<img class="avatar" src="/assets/logo.png" alt="">${esc(m.model || info?.label || '')}`;
+  const name = anon ? `${t(idx === 0 ? 'modelA' : 'modelB')} <span class="anon">?</span>` : `${brandMark(modelOf(m.model) || info || { label: m.model || '' })}${esc(m.model || info?.label || '')}`;
   lane.innerHTML = `<div class="lane-head"><span class="mname">${name}</span>${!anon && info?.vendor ? `<span class="vendor">${esc(info.vendor)}</span>` : ''}<span class="usage"></span></div>
     <details class="thought hidden"><summary>${ico('brain')}<span>${t('thoughts')}</span><span class="th-time"></span></summary><div class="th-body"></div></details>
     <div class="todos hidden"></div><div class="steps"></div><div class="content" dir="auto"></div><div class="outputs hidden"></div><div class="extra"></div>
     <div class="lane-foot"><button class="cp">${ico('copy')}${t('copy')}</button><button class="rg">${ico('refresh')}${t('regen')}</button><button class="pn${m.pinned ? ' on' : ''}">${ico('pin')}${m.pinned ? t('unpin') : t('pin')}</button><button class="fk">${ico('branch')}${t('fork')}</button><button class="ex">${ico('download')}.md</button><span class="meta"></span></div>`;
   if (m.pinned) lane.classList.add('pinned');
-  $('.cp', lane).onclick = () => { navigator.clipboard.writeText(L_text(lane)); toast(t('copied'), 'ok'); };
+  $('.cp', lane).onclick = () => copyFeedback(L_text(lane));
   $('.pn', lane).onclick = () => togglePinMsg(m);
   $('.fk', lane).onclick = () => forkChat(m.id);
   $('.rg', lane).onclick = () => { const um = [...S.chat.messages].reverse().find((x) => x.role === 'user' && !x.hidden && x.ts <= (m.ts || Infinity)); if (um) send(um.content, um.id); };
@@ -289,17 +346,26 @@ function fillLane(lane, m) {
 const fmtN = (n) => (n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n || 0));
 const TOOL_ICO = { start_process: 'play', process_output: 'terminal', stop_process: 'stop', list_processes: 'play', view_image: 'image', ocr_image: 'image', screenshot: 'image', social_download: 'download', social_trending: 'globe', generate_image: 'image', generate_video: 'play', glob: 'search', grep: 'search', todo_write: 'check', todo_read: 'check', diagnostics: 'shield', project_init: 'brain', task: 'sparkle', write_docx: 'file', read_docx: 'file', write_xlsx: 'file', read_xlsx: 'file', write_pptx: 'file', read_pdf: 'file', media_info: 'play', media_edit: 'play', media_concat: 'play', media_from_images: 'play', media_subtitles: 'play', run_shell: 'terminal', run_node: 'code', run_python: 'code', write_file: 'file', edit_file: 'edit', delete_file: 'trash', read_file: 'file', list_files: 'folder', search_files: 'search', web_search: 'globe', fetch_page: 'globe', http_request: 'globe', remember: 'brain', recall: 'brain', ask_user: 'question' };
 const argOf = (d) => d.name === 'social_download' || d.name === 'view_image' || d.name === 'screenshot' ? (d.args.url || d.args.path || '') : d.name === 'social_trending' ? `${d.args.platform || 'tiktok'} ${d.args.query || d.args.region || ''}`.trim() : d.name === 'generate_image' || d.name === 'generate_video' ? String(d.args.prompt || '').slice(0, 90) : d.name === 'task' ? d.args.description : d.name === 'todo_write' ? `${(d.args.todos || []).length} items` : d.name === 'grep' || d.name === 'glob' ? d.args.pattern : d.args && (d.args.input || d.args.output) && /^media_/.test(d.name) ? `${d.args.operation || ''} ${d.args.input || ''}${d.args.output ? ' → ' + d.args.output : ''}`.trim() : d.args && d.args._truncated ? `${d.args.path || ''} ⚠ ${({ fa: 'خروجی مدل بریده شد — بخش سالم ذخیره و ادامه داده می‌شود', ru: 'вывод модели обрезан — сохранено, продолжаю', zh: '模型输出被截断 — 已保留可用部分，继续' })[lang] || 'model output cut — salvaged, continuing'}` : d.name === 'run_shell' ? d.args.command : d.name === 'web_search' ? d.args.query : d.name === 'fetch_page' || d.name === 'http_request' ? d.args.url : d.args.path || d.args.pattern || d.args.note || d.args.query || (d.args.code ? d.args.code.slice(0, 90) : JSON.stringify(d.args).slice(0, 90));
+function diffCard(a) {
+  const list = Array.isArray(a.edits) ? a.edits : [{ old: a.old, new: a.new, all: a.all }];
+  const ln = (x) => String(x ?? '').split('\n').slice(0, 12).join('\n');
+  return '<div class="diffcard">' + list.map((e, i) => `<div class="dc-h">${esc(a.path || '')} · edit ${i + 1}${e.all ? ' · all' : ''}</div><pre class="dc-del">- ${esc(ln(e.old).split('\n').join('\n- '))}</pre><pre class="dc-add">+ ${esc(ln(e.new).split('\n').join('\n+ '))}</pre>`).join('') + '</div>';
+}
 function addStep(steps, d) {
   const s = el('div', 'step run'); s.dataset.cid = d.id;
   s.innerHTML = `<span class="ico">${ico('refresh')}</span><span class="st-name">${esc(d.name)}</span><span class="st-arg">${esc(argOf(d) || '')}</span><span class="st-ms"></span><div class="st-out"></div>`;
   s.onclick = () => s.classList.toggle('open');
-  $('.st-out', s).textContent = JSON.stringify(d.args, null, 2);
+  if (d.name === 'edit_file' && d.args && (d.args.old || Array.isArray(d.args.edits))) $('.st-out', s).innerHTML = diffCard(d.args);
+  else if (d.name === 'write_file' && d.args && typeof d.args.content === 'string') { const ls = d.args.content.split('\n'); $('.st-out', s).innerHTML = `<div class="diffcard"><div class="dc-h">${esc(d.args.path || '')} · ${ls.length} lines</div><pre class="dc-add">+ ${esc(ls.slice(0, 10).join('\n+ '))}${ls.length > 10 ? '\n+ …' : ''}</pre></div>`; }
+  else $('.st-out', s).textContent = JSON.stringify(d.args, null, 2);
   steps.appendChild(s); return s;
 }
 function finishStep(s, d) {
   s.classList.remove('run'); s.classList.add(d.ok ? 'ok' : 'fail'); $('.ico', s).innerHTML = ico(d.ok ? 'check' : 'x'); $('.st-ms', s).textContent = d.ms != null ? d.ms + 'ms' : '';
-  let pretty = d.result; try { const j = JSON.parse(d.result); pretty = j.error ? 'ERROR: ' + j.error : (j.output ?? j.content ?? j.text ?? (j.results ? j.results.map((r) => `• ${r.title}\n  ${r.url}\n  ${r.snippet || ''}`).join('\n') : JSON.stringify(j, null, 2))); } catch (_) {}
-  $('.st-out', s).textContent = pretty;
+  let pretty = d.result; let sum = '';
+  try { const j = JSON.parse(d.result); pretty = j.error ? 'ERROR: ' + j.error : (j.output ?? j.content ?? j.text ?? (j.results ? j.results.map((r) => `• ${r.title}\n  ${r.url}\n  ${r.snippet || ''}`).join('\n') : JSON.stringify(j, null, 2))); if (j.replaced != null) sum = j.replaced + ' replaced' + (j.syntax ? ' · syntax ' + j.syntax : '') + (j.related_tests && j.related_tests.length ? ' · tests: ' + j.related_tests.join(', ') : ''); if (j.error) sum = j.error; } catch (_) {}
+  if ($('.diffcard', s)) { $('.st-out', s).insertAdjacentHTML('afterbegin', `<div class="dc-sum ${d.ok ? 'good' : 'bad'}">${d.ok ? '✓' : '✗'} ${esc(sum || (d.ok ? 'ok' : 'failed'))}</div>`); if (!d.ok) $('.st-out', s).insertAdjacentHTML('beforeend', `<pre class="dc-err">${esc(String(pretty).slice(0, 600))}</pre>`); }
+  else $('.st-out', s).textContent = pretty;
 }
 function collapseSteps(steps) {
   const n = steps.children.length; if (n <= 4 || $('.steps-more', steps.parentElement)) return;
@@ -334,9 +400,9 @@ function renderTodos(lane, todos) {
 }
 function addSubEvent(lane, d) {
   const steps = $('.steps', lane); if (!steps) return;
-  let card = $(`.sub[data-sub="${d.runId}"]`, steps);
-  if (!card) { card = el('div', 'sub'); card.dataset.sub = d.runId; card.innerHTML = `<div class="sub-head">${ico('sparkle')}<span class="pill acc">${t('subagent')}</span><b dir="auto">${esc(d.description || '')}</b><span class="sub-n mono"></span></div><div class="sub-body"></div>`; card.onclick = () => card.classList.toggle('open'); steps.appendChild(card); }
-  if (d.event === 'tool_call') { const b = $('.sub-body', card); b.appendChild(el('div', 'sub-step', `${ico(TOOL_ICO[d.data.name] || 'terminal')}<span class="mono">${esc(d.data.name)}</span><span class="st-arg">${esc(argOf(d.data) || '')}</span>`)); $('.sub-n', card).textContent = b.children.length; }
+  let card = $(`.subagent[data-sub="${d.runId}"]`, steps);
+  if (!card) { card = el('div', 'subagent'); card.dataset.sub = d.runId; card.innerHTML = `<div class="subagent-head">${ico('sparkle')}<span class="pill acc">${t('subagent')}</span><b dir="auto">${esc(d.description || '')}</b><span class="subagent-n mono"></span></div><div class="subagent-body"></div>`; card.onclick = () => card.classList.toggle('open'); steps.appendChild(card); }
+  if (d.event === 'tool_call') { const b = $('.subagent-body', card); b.appendChild(el('div', 'subagent-step', `${ico(TOOL_ICO[d.data.name] || 'terminal')}<span class="mono">${esc(d.data.name)}</span><span class="st-arg">${esc(argOf(d.data) || '')}</span>`)); $('.subagent-n', card).textContent = b.children.length; }
 }
 function lightbox(src) { const lb = el('div', 'lightbox'); lb.innerHTML = `<img src="${src}" alt=""><a class="btn sm" href="${src}" download target="_blank">${ico('download')}${t('download')}</a>`; lb.onclick = (e) => { if (e.target.tagName !== 'A' && !e.target.closest('a')) lb.remove(); }; document.body.appendChild(lb); }
 function showQuestion(lane, d) {
@@ -365,13 +431,13 @@ function voteBar(group, vote) {
   const wrap = el('div');
   const v = el('div', 'vote');
   const finished = group.every((m) => ['done', 'error', 'stopped', 'question'].includes(m.status));
-  for (const [k, lbl] of [['a', '👈 ' + t('voteA')], ['tie', '🤝 ' + t('tie')], ['both', '👎 ' + t('both')], ['b', t('voteB') + ' 👉']]) {
+  for (const [k, lbl] of [['a', '👈 ' + t('voteA')], ['b', t('voteB') + ' 👉'], ['tie', '🤝 ' + t('tie')], ['both', '👎 ' + t('both')]]) {
     const b = el('button', vote && vote.winner === k ? 'voted' : '', lbl); b.disabled = !!vote || !finished;
-    b.onclick = async () => { await api('/api/chats/' + S.chat.id + '/vote', { method: 'POST', body: { runId: group[0].runId, a: group[0].model, b: group[1].model, winner: k } }); toast('🗳 ' + lbl, 'ok'); openChat(S.chat.id); };
+    b.onclick = async () => { await api('/api/chats/' + S.chat.id + '/vote', { method: 'POST', body: { runId: group[0].runId, a: group[0].modelKey || group[0].model, b: group[1].modelKey || group[1].model, winner: k } }); toast('🗳 ' + lbl, 'ok'); openChat(S.chat.id); };
     v.appendChild(b);
   }
   wrap.appendChild(v);
-  if (vote || S.chat.mode !== 'battle') wrap.appendChild(el('div', 'reveal', `${t('revealed')} A = <b>${esc(group[0].model)}</b> · B = <b>${esc(group[1].model)}</b>`));
+  if (vote || S.chat.mode !== 'battle') { const mk = (mm) => `${brandMark(modelOf(mm) || { key: mm, label: mm })}<b>${esc(mm)}</b>`; wrap.appendChild(el('div', 'reveal', `${t('revealed')} A = ${mk(group[0].model || group[0].modelKey)} · B = ${mk(group[1].model || group[1].modelKey)}`)); }
   return wrap;
 }
 
@@ -440,7 +506,14 @@ function renderAttach() {
   box.innerHTML = S.attach.map((a, i) => a.kind === 'image' ? `<span class="imgchip ${a.uploading ? 'up' : ''}"><img src="${a.url}" alt=""><button data-i="${i}">${ico('x')}</button>${a.uploading ? '<span class="spinner"></span>' : ''}</span>` : `<span class="filechip">${ico('file')}${esc(a.name)}${a.uploading ? ' <span class="spinner"></span>' : ''} <button data-i="${i}">${ico('x')}</button></span>`).join('');
   $$('button', box).forEach((b) => (b.onclick = () => { S.attach.splice(+b.dataset.i, 1); renderAttach(); }));
 }
-$('#input').addEventListener('paste', async (e) => { const files = [...(e.clipboardData?.files || [])]; if (!files.length) return; e.preventDefault(); addFiles(files); });
+// paste works everywhere: images/files from ANY focused section attach to the composer; text pasted outside an editable field goes into the composer instead of vanishing
+document.addEventListener('paste', (e) => {
+  const files = [...(e.clipboardData?.files || [])];
+  if (files.length) { e.preventDefault(); addFiles(files); return; }
+  const tgt = e.target;
+  const editable = tgt && (tgt.tagName === 'INPUT' || tgt.tagName === 'TEXTAREA' || tgt.isContentEditable);
+  if (!editable) { const txt = e.clipboardData?.getData('text'); if (txt) { e.preventDefault(); const i = $('#input'); i.value += txt; autosize(); i.focus(); toast(({ fa: 'پیست در composer قرار گرفت', ru: 'Вставлено в composer', zh: '已粘贴到输入框' })[lang] || 'Pasted into the composer', 'ok'); } }
+});
 let dragDepth = 0;
 document.addEventListener('dragenter', (e) => { e.preventDefault(); dragDepth++; document.body.classList.add('dragging'); });
 document.addEventListener('dragleave', () => { if (--dragDepth <= 0) { dragDepth = 0; document.body.classList.remove('dragging'); } });
@@ -612,7 +685,7 @@ function handle(p) {
     case 'files': L.outs = [...(L.outs || []), ...(d.files || [])]; renderOutputs(L.el, L.outs); break;
     case 'sub_event': addSubEvent(L.el, d); break;
     case 'compacted': toast(t('compacted'), 'ok'); break;
-    case 'final': { L.content = d.text; const c = $('.content', L.el); c.innerHTML = md(d.text); c.dir = detectDir(d.text); c.classList.remove('streaming'); L.el.classList.remove('streaming'); collapseLong(c, d.text); const th = $('.thought', L.el); th.classList.remove('live'); th.open = false; if (!L.anon) $('.mname', L.el).innerHTML = `<img class="avatar" src="/assets/logo.png" alt="">${esc(d.model)}`; L.m.status = d.question ? 'question' : 'done'; L.m.model = d.model; if (PLAN_RE.test(d.text)) addPlanActions(L.el); $('.meta', L.el).textContent = ((Date.now() - L.t0) / 1000).toFixed(1) + 's'; break; }
+    case 'final': { L.content = d.text; const c = $('.content', L.el); c.innerHTML = md(d.text); c.dir = detectDir(d.text); c.classList.remove('streaming'); L.el.classList.remove('streaming'); collapseLong(c, d.text); const th = $('.thought', L.el); th.classList.remove('live'); th.open = false; if (!L.anon) $('.mname', L.el).innerHTML = `${brandMark(modelOf(d.model) || { label: d.model })}${esc(d.model)}`; L.m.status = d.question ? 'question' : 'done'; L.m.model = d.model; if (PLAN_RE.test(d.text)) addPlanActions(L.el); $('.meta', L.el).textContent = ((Date.now() - L.t0) / 1000).toFixed(1) + 's'; break; }
     case 'error': { L.el.classList.add('error'); L.m.status = 'error'; L.m.error = d.text; L.m.content = L.content; if (/429|503|busy|concurrency|rate/i.test(d.text)) toast(t('allBusy'), 'err'); addInterruptedActions(L.el, L.m); break; }
     case 'stopped': { $('.meta', L.el).textContent = t('stopped'); L.m.status = 'stopped'; L.m.content = L.content; addInterruptedActions(L.el, L.m); break; }
     case 'done': {
@@ -657,7 +730,7 @@ const togglePanel = () => { const c = $('#panel').classList.toggle('collapsed');
 $('#toggle-panel').onclick = togglePanel;
 if ($('#open-help')) $('#open-help').onclick = () => showHelp();
 if (localStorage.getItem('orca.panel') === '1') openPanel();
-function showTab(name) { $$('.panel-tabs button').forEach((x) => x.classList.toggle('active', x.dataset.tab === name)); $$('.tab').forEach((x) => x.classList.toggle('active', x.id === 'tab-' + name)); if (name === 'files') loadFiles(); if (name === 'procs') loadProcs(); if (name === 'changes') { refreshChanges(); $('#chg-badge').classList.add('hidden'); } }
+function showTab(name) { $$('.panel-tabs button').forEach((x) => x.classList.toggle('active', x.dataset.tab === name)); $$('.panel-tabs button.active').forEach((x) => x.scrollIntoView({ inline: 'nearest', block: 'nearest' })); $$('.tab').forEach((x) => x.classList.toggle('active', x.id === 'tab-' + name)); if (name === 'files') loadFiles(); if (name === 'procs') loadProcs(); if (name === 'changes') { refreshChanges(); $('#chg-badge').classList.add('hidden'); } }
 $$('.panel-tabs button').forEach((b) => (b.onclick = () => showTab(b.dataset.tab)));
 const fmtT = (ts) => new Date(ts).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 function tlItem(d, ts, onClick) { const it = el('div', 'tl-item'); it.dataset.cid = d.id; it.innerHTML = `<span class="t">${fmtT(ts)}</span>${ico(TOOL_ICO[d.name] || 'terminal')}<span class="n">${esc(d.name)}</span><span class="a">${esc(argOf(d) || '')}</span>`; it.onclick = onClick; return it; }
@@ -675,7 +748,7 @@ async function loadFiles() {
     if (!isDir) d.onclick = () => previewFile(name);
     box.appendChild(d);
   }
-  if (!(r.entries || []).length) box.innerHTML = '<div class="empty">—</div>';
+  if (!(r.entries || []).length) box.innerHTML = `<div class="empty">${esc(t('emptyFiles'))}</div>`;
 }
 const fmtDur = (ms) => (ms < 1000 ? '<1s' : ms < 60000 ? Math.round(ms / 1000) + 's' : Math.floor(ms / 60000) + 'm ' + Math.round((ms % 60000) / 1000) + 's');
 const fmtB = (n) => (n < 1024 ? n + 'B' : n < 1048576 ? (n / 1024).toFixed(1) + 'K' : (n / 1048576).toFixed(1) + 'M');
@@ -816,22 +889,50 @@ function renderChange(d, prepend) {
   $('.undo', c).onclick = async () => { const r = await api('/api/checkpoints/' + d.id, { method: 'POST', body: { direction: 'before' } }); toast(r.ok ? t('restored') + ': ' + d.path : r.error, r.ok ? 'ok' : 'err'); };
   prepend ? box.prepend(c) : box.appendChild(c);
 }
-async function refreshChanges() { const box = $('#changes-list'); box.innerHTML = ''; if (!S.chat) return; const { checkpoints } = await api('/api/chats/' + S.chat.id + '/checkpoints'); for (const ck of checkpoints.reverse()) renderChange(ck, false); if (!checkpoints.length) box.innerHTML = '<div class="empty">—</div>'; }
+async function refreshChanges() { const box = $('#changes-list'); box.innerHTML = ''; if (!S.chat) { box.innerHTML = `<div class="empty">${esc(t('emptyChanges'))}</div>`; return; } const { checkpoints } = await api('/api/chats/' + S.chat.id + '/checkpoints'); for (const ck of checkpoints.reverse()) renderChange(ck, false); if (!checkpoints.length) box.innerHTML = `<div class="empty">${esc(t('emptyChanges'))}</div>`; }
 $('#restore-all').onclick = async () => { if (!S.chat) return; const { checkpoints } = await api('/api/chats/' + S.chat.id + '/checkpoints'); if (!checkpoints.length || !confirm(t('restoreAll') + '?')) return; for (const ck of checkpoints.reverse()) await api('/api/checkpoints/' + ck.id, { method: 'POST', body: { direction: 'before' } }); toast(t('restored'), 'ok'); loadFiles(); };
 
 // ───────────────────────── modals ─────────────────────────
-const modal = (html) => { $('#modal-body').innerHTML = html; $('#modal').classList.remove('hidden'); };
+const modal = (html) => { $('#modal-body').innerHTML = html; $('#modal-body').classList.remove('st-body'); $('#modal').classList.remove('hidden'); };
 const closeModal = () => $('#modal').classList.add('hidden');
 $('.modal-x').onclick = closeModal; $('#modal').onclick = (e) => { if (e.target.id === 'modal') closeModal(); };
 $('#rail-toggle').onclick = () => { S._railUser = true; $('#rail').classList.toggle('collapsed'); };
 $('#tb-theme').onclick = () => { P.theme = root.dataset.theme === 'dark' ? 'light' : 'dark'; applyPrefs(); api('/api/config', { method: 'POST', body: { theme: P.theme } }); };
 
-$('#open-leaderboard').onclick = async () => { const { rows } = await api('/api/leaderboard'); modal(`<h2>${ico('trophy')}${t('leaderboard')}</h2><p class="sub">${({ fa: 'بر اساس رأی‌های شما در حالت مقایسه و نبرد (Elo محلی)', ru: 'По вашим голосам в режимах сравнения/битвы (локальный Elo)', zh: '基于你在对比/对战模式中的投票（本地 Elo）' })[lang] || 'From your votes in compare/battle modes (local Elo)'}</p>${rows.length ? `<table class="lb"><tr><th>#</th><th>Model</th><th>Elo</th><th>W</th><th>L</th><th>T</th></tr>${rows.map((r, i) => `<tr><td>${i + 1}</td><td>${esc(r.model)}</td><td class="elo">${r.elo}</td><td>${r.wins}</td><td>${r.losses}</td><td>${r.ties}</td></tr>`).join('')}</table>` : '<div class="empty">—</div>'}`); };
+$('#open-leaderboard').onclick = async () => { const { rows } = await api('/api/leaderboard'); modal(`<h2>${ico('trophy')}${t('leaderboard')}</h2><p class="sub">${({ fa: 'بر اساس رأی‌های شما در حالت مقایسه و نبرد (Elo محلی)', ru: 'По вашим голосам в режимах сравнения/битвы (локальный Elo)', zh: '基于你在对比/对战模式中的投票（本地 Elo）' })[lang] || 'From your votes in compare/battle modes (local Elo)'}</p>${rows.length ? `<table class="lb"><tr><th>#</th><th>Model</th><th>Elo</th><th>W</th><th>L</th><th>T</th></tr>${rows.map((r, i) => `<tr><td>${i + 1}</td><td class="lb-m">${brandMark(modelOf(r.model) || { key: r.model, label: r.model })}${esc(modelOf(r.model)?.label || r.model)}</td><td class="elo">${r.elo}</td><td>${r.wins}</td><td>${r.losses}</td><td>${r.ties}</td></tr>`).join('')}</table>` : `<div class="empty">${esc(t('emptyLb'))}</div>`}`); };
 $('#open-memory').onclick = async () => { const { text } = await api('/api/memory'); modal(`<h2>${ico('brain')}${t('memory')}</h2><p class="sub">${({ fa: 'یادداشت‌هایی که ORCA دربارهٔ شما و پروژه‌ها نگه می‌دارد و در هر گفتگو می‌بیند. قابل ویرایش.', ru: 'Долговременные заметки ORCA о вас и ваших проектах, видны в каждом чате. Можно редактировать.', zh: 'ORCA 保存的关于你和项目的长期笔记，在每个对话中可见。可编辑。' })[lang] || 'Durable notes ORCA keeps about you and your projects, visible in every chat. Editable.'}</p><textarea class="memory-ta" id="mem">${esc(text)}</textarea><div style="margin-top:12px;display:flex;gap:8px"><button class="btn primary" id="mem-save">${ico('check')}${t('save')}</button></div>`); $('#mem-save').onclick = async () => { await api('/api/memory', { method: 'POST', body: { text: $('#mem').value } }); toast(t('saved'), 'ok'); closeModal(); }; };
 $('#open-settings').onclick = () => openSettings();
 
 const SHORTCUTS = [['Ctrl N', 'newChat'], ['Ctrl K', 'actions'], ['Ctrl B', 'railT'], ['Ctrl .', 'panelT'], ['Ctrl ,', 'settings'], ['Esc', 'stop'], ['Ctrl Shift L', 'theme'], ['Ctrl Shift F', 'searchPh'], ['Ctrl /', 'shortcuts']];
 // ---- Providers (bring your own key) ----
+const MCP_PRESETS = [
+  { id: 'filesystem', label: 'Filesystem', stdio: { command: 'npx', args: ['-y', '@modelcontextprotocol/server-filesystem', '.'] } },
+  { id: 'fetch', label: 'Fetch', stdio: { command: 'npx', args: ['-y', '@modelcontextprotocol/server-fetch'] } },
+  { id: 'memory', label: 'Memory', stdio: { command: 'npx', args: ['-y', '@modelcontextprotocol/server-memory'] } },
+  { id: 'git', label: 'Git', stdio: { command: 'npx', args: ['-y', '@modelcontextprotocol/server-git'] } },
+  { id: 'playwright', label: 'Playwright', stdio: { command: 'npx', args: ['-y', '@playwright/mcp@latest'] } },
+  { id: 'github', label: 'GitHub', stdio: { command: 'npx', args: ['-y', '@modelcontextprotocol/server-github'], env: { GITHUB_PERSONAL_ACCESS_TOKEN: 'ghp_…' } } },
+  { id: 'huggingface', label: 'HuggingFace', stdio: { command: 'npx', args: ['-y', '@huggingface/mcp-server'], env: { HF_TOKEN: 'hf_…' } } },
+  { id: 'hf-hub', label: 'HF Hub (http)', http: { url: 'https://huggingface.co/mcp', headers: { Authorization: 'Bearer hf_…' } } },
+  { id: 'brave', label: 'Brave Search', stdio: { command: 'npx', args: ['-y', '@modelcontextprotocol/server-brave-search'], env: { BRAVE_API_KEY: 'BSA_…' } } },
+  { id: 'everything', label: 'Everything (test)', stdio: { command: 'npx', args: ['-y', '@modelcontextprotocol/server-everything'] } },
+];
+function applyMcpPreset(id) {
+  const p = MCP_PRESETS.find((x) => x.id === id); if (!p) return;
+  mcpShowForm(false);
+  $('#mf-name').value = p.id;
+  const want = p.http ? 'http' : 'stdio';
+  const btn = $$('#mf-type button').find((b) => b.dataset.v === want); if (btn) btn.click();
+  if (p.stdio) {
+    $('#mf-cmd').value = p.stdio.command; $('#mf-args').value = (p.stdio.args || []).join(' ');
+    $('#mf-env').value = Object.entries(p.stdio.env || {}).map(([k, v]) => `${k}=${v}`).join('\n');
+  } else {
+    $('#mf-url').value = p.http.url; $('#mf-hdr').value = Object.entries(p.http.headers || {}).map(([k, v]) => `${k}: ${v}`).join('\n');
+  }
+  toast(({ fa: 'پرسِت پر شد — ذخیره کنید', ru: 'Пресет заполнен — сохраните', zh: '预设已填充——请保存' })[lang] || 'Preset filled — save it', 'ok');
+}
+document.addEventListener('click', (e) => { const c = e.target.closest('.mcp-chips .chip'); if (c) applyMcpPreset(c.dataset.p); });
+
 // Flow: pick a provider from the catalog (models.dev mirror, 200+) or "Custom" → paste key → models auto-discovered from the
 // provider's /models endpoint (fallback: catalog) → tick the ones you want → Test → Save. Keys never leave this machine.
 let CATALOG = null;
@@ -839,22 +940,48 @@ async function providerEditor(existingId) {
   const c = S.cfg; const box = $('#prov-editor'); box.classList.remove('hidden'); box.innerHTML = `<div class="empty">…</div>`;
   if (!CATALOG) { try { CATALOG = await api('/api/providers/catalog'); } catch (_) { CATALOG = { providers: [] }; } }
   const cur = existingId ? { id: existingId, ...(c.providers[existingId] || {}) } : { id: '', name: '', baseUrl: '', apiKey: '', models: [] };
-  const featured = CATALOG.providers.filter((p) => (CATALOG.featured || []).includes(p.id));
-  const others = CATALOG.providers.filter((p) => !(CATALOG.featured || []).includes(p.id));
-  const opt = (p) => `<option value="${esc(p.id)}" ${p.id === cur.id ? 'selected' : ''}>${esc(p.name)}${p.count ? ` (${p.count})` : ''}</option>`;
   box.innerHTML = `
     <div class="pe-head"><b>${existingId ? ts('editProvider') : ts('addProvider')}</b><button class="ib sm" id="pe-close">${ico('x')}</button></div>
-    <div class="form-row"><label>${ts('provider')}</label><select class="text" id="pe-id" ${existingId ? 'disabled' : ''}><optgroup label="${ts('popular')}">${featured.map(opt).join('')}</optgroup><optgroup label="${ts('allProviders')}">${others.map(opt).join('')}</optgroup><optgroup label="${ts('judge')}"><option value="__judge" ${cur.id === '__judge' ? 'selected' : ''}>${esc(ts('judge'))} — System One (TypeSafe)</option></optgroup></select></div>
+    <div class="form-row"><label>${ts('provider')}</label><div class="pe-pickwrap"><button class="pe-pick" id="pe-pick" type="button"${existingId ? ' disabled' : ''}></button></div><input type="hidden" id="pe-id" value="${esc(cur.id || '')}"></div>
     <div class="desc hidden" id="pe-judge-note"></div>
     <div class="form-row"><label>${ts('displayName')}</label><input class="text" id="pe-name" value="${esc(cur.name || '')}" placeholder="—"></div>
     <div class="form-row"><label>Base URL</label><input class="text mono" id="pe-url" value="${esc(cur.baseUrl || '')}" placeholder="https://api.example.com/v1" spellcheck="false"></div>
+    <div class="form-row"><label>Logo URL (optional — brand mark for this provider)</label><input class="text mono" id="pe-logo" value="${esc(cur.logo || '')}" placeholder="https://…/logo.svg or data:image/png;base64,…" spellcheck="false"></div>
     <div class="form-row"><label>${ts('apiKey')}</label><input class="text mono" id="pe-key" type="password" placeholder="${cur.keySet ? cur.apiKey : ts('pasteKey')}" spellcheck="false" autocomplete="off"><button class="ib sm" id="pe-eye" data-tip="${ts('show')}">${ico('eye')}</button><a class="small" id="pe-doc" target="_blank" rel="noopener" href="#">${ts('getKey')}</a></div>
     <div class="form-row"><label>${ts('models')}</label><div class="pe-models-tools"><input class="text" id="pe-filter" placeholder="${ts('filterModels')}"><button class="btn sm" id="pe-discover">${ico('refresh')}${ts('discover')}</button><span class="small" id="pe-count"></span></div></div>
     <div class="pe-models" id="pe-models"></div>
     <div class="pe-foot"><span class="small" id="pe-msg"></span><span class="sp"></span><button class="btn sm" id="pe-test">${ts('test')}</button><button class="btn primary sm" id="pe-save">${ico('check')}${ts('save')}</button></div>`;
   let known = []; // catalog rows for the selected provider
   let chosen = new Map((cur.models || []).map((m) => [m.id, m]));
-  const provInfo = () => CATALOG.providers.find((p) => p.id === $('#pe-id').value) || {};
+  const provInfo = () => ( $('#pe-id').value === '__judge' ? { id: '__judge', name: (ts('judge') || 'Judge') + ' — System One (TypeSafe)' } : CATALOG.providers.find((p) => p.id === $('#pe-id').value) || {});
+  // custom themed provider picker (same component language as the model picker): logo + search + grouped list
+  let provId = cur.id || '';
+  const provById = (id) => (id === '__judge' ? { id: '__judge', name: (ts('judge') || 'Judge') + ' — System One (TypeSafe)', judge: true } : CATALOG.providers.find((p) => p.id === id));
+  const renderPePick = () => { const p = provById(provId); $('#pe-id').value = provId; $('#pe-pick').innerHTML = p ? `${brandMark({ vendor: p.name, label: p.name })}<span class="pe-pick-label">${esc(p.name)}</span>${p.count ? `<span class="k">${p.count}</span>` : ''}<span class="pk-chev">${ico('chev')}</span>` : `<span class="pe-pick-label">${({ fa: 'انتخاب ارائه‌دهنده…', ru: 'Выбор провайдера…', zh: '选择提供商…' })[lang] || 'Choose provider…'}</span><span class="pk-chev">${ico('chev')}</span>`; };
+  const closePeMenu = () => { const m = $('#pe-menu'); if (m) { if (m._key) document.removeEventListener('keydown', m._key); m.remove(); } };
+  const openPeMenu = () => {
+    closePeMenu();
+    const menu = el('div', 'pk-menu pe-menu'); menu.id = 'pe-menu';
+    menu.innerHTML = `<input class="text pe-search" id="pe-q" placeholder="${({ fa: 'جست‌وجوی ارائه‌دهنده…', ru: 'Поиск провайдера…', zh: '搜索提供商…' })[lang] || 'Search providers…'}" spellcheck="false"><div class="pe-list"></div>`;
+    const draw = (q) => {
+      const f = (q || '').toLowerCase();
+      const feat = (CATALOG.featured || []).map(provById).filter(Boolean);
+      const rest = CATALOG.providers.filter((p) => !(CATALOG.featured || []).includes(p.id));
+      const all = [...feat, ...rest, provById('__judge')];
+      const vis = all.filter((p) => p && (!f || p.name.toLowerCase().includes(f) || p.id.includes(f))).slice(0, 80);
+      $('.pe-list', menu).innerHTML = vis.map((p) => `<button class="pk-item" data-id="${esc(p.id)}">${brandMark({ vendor: p.name, label: p.name })}<span class="pk-i-top"><span class="pk-i-label">${esc(p.name)}</span>${p.count ? `<em class="pk-i-tier">${p.count}</em>` : ''}</span><span class="pk-i-sub">${esc((p.api || '').replace(/^https?:\/\//, ''))}</span></button>`).join('') || `<div class="empty small">—</div>`;
+      $$('.pk-item', menu).forEach((b) => (b.onclick = () => { provId = b.dataset.id; closePeMenu(); renderPePick(); applyProvider(); }));
+    };
+    draw('');
+    $('#pe-q', menu).oninput = (e) => draw(e.target.value);
+    $('.pe-pickwrap').appendChild(menu);
+    menu._key = (e) => { if (e.key === 'Escape') { closePeMenu(); $('#pe-pick').focus(); } };
+    document.addEventListener('keydown', menu._key);
+    $('#pe-q', menu).focus();
+  };
+  $('#pe-pick').onclick = () => ($('#pe-menu') ? closePeMenu() : openPeMenu());
+  document.addEventListener('mousedown', (e) => { const m = $('#pe-menu'); if (m && !e.target.closest('#pe-menu') && !e.target.closest('#pe-pick')) closePeMenu(); });
+  renderPePick();
   const renderModels = () => {
     const f = ($('#pe-filter').value || '').toLowerCase();
     const rows = [...known]; for (const m of chosen.values()) if (!rows.find((r) => r.id === m.id)) rows.unshift({ ...m, custom: true });
@@ -899,7 +1026,7 @@ async function providerEditor(existingId) {
       S.cfg = await api('/api/config'); api('/api/health').then((h) => { S.health = h; }).catch(() => {});
       toast(ts('judgeAdded'), 'ok'); box.classList.add('hidden'); openSettings('agent');
       setTimeout(() => { const el = $('#jg-key'); if (el) { el.closest('.card, .st-section, .form-row')?.scrollIntoView({ block: 'center', behavior: 'smooth' }); } }, 80);
-      return; } const id = existingId || $('#pe-id').value; if (!id) return; const pv = { name: $('#pe-name').value.trim() || provInfo().name || id, baseUrl: $('#pe-url').value.trim() || provInfo().api || '', models: [...chosen.values()] }; const k = $('#pe-key').value.trim(); if (k) pv.apiKey = k; if (!pv.baseUrl) return ($('#pe-msg').textContent = ts('needUrl')); if (!pv.models.length) return ($('#pe-msg').textContent = ts('pickModelFirst')); await api('/api/config', { method: 'POST', body: { providers: { [id]: pv } } }); await loadConfig(); toast(ts('saved'), 'ok'); openSettings('models'); };
+      return; } const id = existingId || $('#pe-id').value; if (!id) return; const pv = { name: $('#pe-name').value.trim() || provInfo().name || id, baseUrl: $('#pe-url').value.trim() || provInfo().api || '', models: [...chosen.values()] }; const lg = ($('#pe-logo')?.value || '').trim(); if (/^(https?:\/\/|data:image\/)/i.test(lg)) pv.logo = lg; const k = $('#pe-key').value.trim(); if (k) pv.apiKey = k; if (!pv.baseUrl) return ($('#pe-msg').textContent = ts('needUrl')); if (!pv.models.length) return ($('#pe-msg').textContent = ts('pickModelFirst')); await api('/api/config', { method: 'POST', body: { providers: { [id]: pv } } }); await loadConfig(); toast(ts('saved'), 'ok'); openSettings('models'); };
   await applyProvider();
   if (existingId) { $('#pe-name').value = cur.name || ''; $('#pe-url').value = cur.baseUrl || ''; renderModels(); }
 }
@@ -907,6 +1034,80 @@ async function paintVault() {
   const d = $('#cloud-dot'), st = $('#cloud-state'); if (!d || !st) return;
   try { const v = await api('/api/vault'); d.className = 'cloud-dot ' + (v.ok ? 'on' : 'off'); st.textContent = !v.enabled ? tu('cloudOff') : v.ok ? `${tu('cloudOk')} · ${v.aliases.length} ${ts('modelsN')} · ${v.keys} ${ts('keysN')}` : `${tu('cloudDown')}${v.error ? ' (' + v.error + ')' : ''}`; } catch (_) { d.className = 'cloud-dot off'; st.textContent = tu('cloudDown'); }
 }
+async function mcpPatch(mut) { const cur = JSON.parse(JSON.stringify(S.cfg.mcpServers || {})); mut(cur); S.cfg = await api('/api/config', { method: 'POST', body: { mcpServers: cur } }); }
+async function loadMcpSettings() {
+  const box = $('#mcp-box'); if (!box) return;
+  let snap = []; try { snap = (await api('/api/mcp')).servers; } catch (_) {}
+  if (!snap.length) box.innerHTML = `<div class="empty">${esc(ts('mcpEmpty'))}</div>`;
+  else box.innerHTML = snap.map((s) => `
+    <div class="mcp-srv" data-n="${esc(s.name)}">
+      <div class="mcp-head"><span class="mcp-dot ${esc(s.status)}" title="${esc(ts('mcpSt' + s.status[0].toUpperCase() + s.status.slice(1)) || s.status)}"></span><b>${esc(s.name)}</b><span class="pill">${s.type}</span><span class="pill">${s.mode}</span><span class="small" style="color:var(--fg-3)">${s.tools.filter((x) => x.enabled).length}/${s.tools.length} ${esc(ts('mcpToolsN'))} · ~${s.tokEst} tok</span><span style="flex:1"></span><button class="btn sm" data-a="restart" title="${esc(ts('mcpRestart'))}">${ico('refresh')}</button><button class="btn sm" data-a="logs" title="${esc(ts('mcpLogs'))}">${ico('eye')}</button><button class="btn sm danger" data-a="del" title="${esc(ts('mcpDel'))}">${ico('trash')}</button></div>
+      ${s.error ? `<div class="mcp-err small">${esc(s.error)}</div>` : ''}
+      ${s.changed ? `<div class="mcp-warn small">${ico('shield')}<span style="flex:1">${esc(ts('mcpChanged'))}</span><button class="btn sm" data-a="approve">${esc(ts('mcpApprove'))}</button></div>` : ''}
+      ${s.pollution ? `<div class="mcp-warn small">${esc(ts('mcpPollution'))}</div>` : ''}
+      <div class="mcp-ctrl"><span class="small">${esc(ts('mcpEnabled'))}</span><button class="switch ${s.enabled ? 'on' : ''}" data-a="enabled" role="switch" aria-checked="${s.enabled}"></button><span class="small">${esc(ts('mcpMode'))}</span><div class="seg sm"><button data-v="direct" class="${s.mode === 'direct' ? 'active' : ''}" title="${esc(ts('mcpDirectDesc'))}">${esc(ts('mcpDirect'))}</button><button data-v="compact" class="${s.mode === 'compact' ? 'active' : ''}" title="${esc(ts('mcpCompactDesc'))}">${esc(ts('mcpCompact'))}</button></div></div>
+      <details class="mcp-tools"><summary>${esc(ts('mcpToolsN'))} (${s.tools.length})</summary>${s.tools.length ? s.tools.map((tl) => `<label class="mcp-tool"><input type="checkbox" data-t="${esc(tl.name)}" ${tl.enabled ? 'checked' : ''}><span class="mcp-tl-name mono">${esc(tl.name)}</span><span class="mcp-tl-desc">${esc(tl.description)}</span></label>`).join('') : `<div class="small" style="color:var(--fg-3);padding:6px 4px">…</div>`}</details>
+      <pre class="mcp-log hidden" dir="ltr"></pre>
+    </div>`).join('');
+  $$('.mcp-srv', box).forEach((card) => {
+    const name = card.dataset.n;
+    card.querySelector('[data-a=restart]').onclick = async () => { await api('/api/mcp', { method: 'POST', body: { action: 'restart', name } }); loadMcpSettings(); };
+    card.querySelector('[data-a=del]').onclick = async () => { if (!confirm(ts('mcpDelConfirm'))) return; await api('/api/mcp', { method: 'POST', body: { action: 'stop', name } }); await mcpPatch((cur) => { delete cur[name]; }); loadMcpSettings(); };
+    const ap = card.querySelector('[data-a=approve]'); if (ap) ap.onclick = async () => { await api('/api/mcp', { method: 'POST', body: { action: 'approve', name } }); loadMcpSettings(); };
+    card.querySelector('[data-a=logs]').onclick = async () => { const pre = $('.mcp-log', card); if (!pre.classList.contains('hidden')) return pre.classList.add('hidden'); const r = await api('/api/mcp/logs?name=' + encodeURIComponent(name)); pre.textContent = (r.lines || []).join('\n') || '—'; pre.classList.remove('hidden'); };
+    card.querySelector('[data-a=enabled]').onclick = async (e) => { const on = e.currentTarget.classList.toggle('on'); await mcpPatch((cur) => { cur[name] = { ...(cur[name] || {}), enabled: on }; }); await api('/api/mcp', { method: 'POST', body: { action: on ? 'restart' : 'stop', name } }); loadMcpSettings(); };
+    $$('.seg.sm button', card).forEach((b) => (b.onclick = async () => { await mcpPatch((cur) => { cur[name] = { ...(cur[name] || {}), mode: b.dataset.v }; }); loadMcpSettings(); }));
+    $$('.mcp-tool input', card).forEach((cb) => (cb.onchange = async () => { await mcpPatch((cur) => { const sv = (cur[name] = cur[name] || {}); sv.tools = { ...(sv.tools || {}), [cb.dataset.t]: cb.checked }; }); loadMcpSettings(); }));
+  });
+}
+const splitArgs = (str) => { const out = []; let cur = '', q = ''; for (const ch of str) { if (q) { if (ch === q) q = ''; else cur += ch; } else if (ch === '"' || ch === "'") q = ch; else if (ch === ' ') { if (cur) out.push(cur); cur = ''; } else cur += ch; } if (cur) out.push(cur); return out; };
+function mcpShowForm(pasteMode) {
+  const f = $('#mcp-form'); f.classList.remove('hidden');
+  const fld = (label, inner) => `<div class="form-row"><label>${label}</label>${inner}</div>`;
+  const cancel = ({ en: 'Cancel', fa: 'انصراف', ru: 'Отмена', zh: '取消' })[lang] || 'Cancel';
+  if (pasteMode) {
+    f.innerHTML = `<textarea class="text mono" id="mf-json" rows="6" dir="ltr" spellcheck="false" placeholder='${esc(ts('mcpPastePh'))}'></textarea><div class="form-row" style="gap:8px"><button class="btn primary" id="mf-save">${ico('check')}${ts('save')}</button><button class="btn" id="mf-x">${cancel}</button></div>`;
+    $('#mf-x').onclick = () => f.classList.add('hidden');
+    $('#mf-save').onclick = async () => {
+      let j; try { j = JSON.parse($('#mf-json').value); } catch (e) { return toast('JSON: ' + e.message, 'err'); }
+      let servers = j;
+      if (j.mcpServers) servers = j.mcpServers;
+      else if (j.command || j.url || j.type) { const n = prompt(ts('mcpName')); if (!n) return; servers = { [n]: j }; }
+      if (!servers || typeof servers !== 'object') return toast('JSON?', 'err');
+      await mcpPatch((cur) => { for (const [n, sv] of Object.entries(servers)) if (n && sv && typeof sv === 'object') cur[n] = { enabled: true, ...sv }; });
+      toast(ts('saved'), 'ok'); f.classList.add('hidden'); loadMcpSettings();
+    };
+    return;
+  }
+  f.innerHTML = `<div class="mcp-grid">
+    ${fld(ts('mcpName'), `<input class="text" id="mf-name" placeholder="filesystem" spellcheck="false">`)}
+    ${fld(ts('mcpType'), `<div class="seg sm" id="mf-type"><button data-v="stdio" class="active">stdio</button><button data-v="http">http</button></div>`)}
+    <div id="mf-stdio">${fld(ts('mcpCmd'), `<input class="text mono" id="mf-cmd" dir="ltr" placeholder="npx">`)}${fld(ts('mcpArgs'), `<input class="text mono" id="mf-args" dir="ltr" placeholder="-y @modelcontextprotocol/server-filesystem /path">`)}${fld(ts('mcpEnv'), `<textarea class="text mono" id="mf-env" rows="2" dir="ltr" placeholder="API_KEY=…"></textarea>`)}</div>
+    <div id="mf-http" class="hidden">${fld(ts('mcpUrl'), `<input class="text mono" id="mf-url" dir="ltr" placeholder="https://…/mcp">`)}${fld(ts('mcpHeaders'), `<textarea class="text mono" id="mf-hdr" rows="2" dir="ltr" placeholder="Authorization: Bearer …"></textarea>`)}</div>
+    ${fld(ts('mcpMode'), `<div class="seg sm" id="mf-mode"><button data-v="direct" class="active" title="${esc(ts('mcpDirectDesc'))}">${esc(ts('mcpDirect'))}</button><button data-v="compact" title="${esc(ts('mcpCompactDesc'))}">${esc(ts('mcpCompact'))}</button></div>`)}
+    <div class="form-row" style="gap:8px"><button class="btn primary" id="mf-save">${ico('check')}${ts('save')}</button><button class="btn" id="mf-x">${cancel}</button></div>
+  </div>`;
+  const segv = (id) => { let v = $('#' + id + ' button.active') ? $('#' + id + ' button.active').dataset.v : ''; $$('#' + id + ' button').forEach((b) => (b.onclick = () => { $$('#' + id + ' button').forEach((x) => x.classList.toggle('active', x === b)); v = b.dataset.v; if (id === 'mf-type') { $('#mf-stdio').classList.toggle('hidden', v !== 'stdio'); $('#mf-http').classList.toggle('hidden', v !== 'http'); } })); return () => v; };
+  const typeV = segv('mf-type'); const modeV = segv('mf-mode');
+  $('#mf-x').onclick = () => f.classList.add('hidden');
+  $('#mf-save').onclick = async () => {
+    const name = $('#mf-name').value.trim(); if (!name) return toast(ts('mcpName') + '?', 'err');
+    const sv = { enabled: true, mode: modeV() || 'direct' };
+    if (typeV() === 'http') {
+      sv.url = $('#mf-url').value.trim(); if (!sv.url) return toast(ts('mcpUrl') + '?', 'err');
+      const h = {}; $('#mf-hdr').value.split('\n').map((l) => l.trim()).filter(Boolean).forEach((l) => { const i = l.indexOf(':'); if (i > 0) h[l.slice(0, i).trim()] = l.slice(i + 1).trim(); });
+      if (Object.keys(h).length) sv.headers = h;
+    } else {
+      sv.command = $('#mf-cmd').value.trim(); if (!sv.command) return toast(ts('mcpCmd') + '?', 'err');
+      const av = $('#mf-args').value.trim(); if (av) sv.args = splitArgs(av); else sv.args = [];
+      const e = {}; $('#mf-env').value.split('\n').map((l) => l.trim()).filter(Boolean).forEach((l) => { const i = l.indexOf('='); if (i > 0) e[l.slice(0, i).trim()] = l.slice(i + 1).trim(); });
+      if (Object.keys(e).length) sv.env = e;
+    }
+    await mcpPatch((cur) => { cur[name] = sv; });
+    toast(ts('saved'), 'ok'); f.classList.add('hidden'); loadMcpSettings();
+  };
+}
+
 async function openSettings(page = 'general') {
   const c = await api('/api/config');
   const fa = lang === 'fa';
@@ -915,8 +1116,9 @@ async function openSettings(page = 'general') {
   const sw = (id, on) => `<button class="switch ${on ? 'on' : ''}" id="${id}" role="switch" aria-checked="${on}"></button>`;
   const segm = (id, opts, val) => `<div class="seg" id="${id}">${opts.map(([v, l]) => `<button data-v="${v}" class="${v === val ? 'active' : ''}">${l}</button>`).join('')}</div>`;
   modal(`<h2>${ico('settings')}${t('settings')}</h2><p class="sub">ORCA ${c.version || ''}</p>
-  <div class="tabs-h" id="st-tabs">${[['general', 'sparkle'], ['appearance', 'sun'], ['models', 'code'], ['agent', 'rocket'], ['data', 'folder'], ['updates', 'download']].map(([k, i]) => `<button data-p="${k}" class="${k === page ? 'active' : ''}">${ico(i)}${ts(k)}</button>`).join('')}</div>
+  <div class="tabs-h" id="st-tabs">${[['general', 'sparkle'], ['appearance', 'sun'], ['models', 'code'], ['mcp', 'plug'], ['agent', 'rocket'], ['data', 'folder'], ['updates', 'download']].map(([k, i]) => `<button data-p="${k}" class="${k === page ? 'active' : ''}">${ico(i)}${ts(k)}</button>`).join('')}</div>
 
+  <div class="spages">
   <div class="spage ${page === 'general' ? 'active' : ''}" data-p="general">
     ${row(ts('lang'), segm('st-lang', LANGS, lang))}
     ${row(ts('sendKey'), segm('st-sendkey', [['enter', 'Enter'], ['ctrlEnter', 'Ctrl+Enter']], P.sendKey))}
@@ -938,9 +1140,9 @@ async function openSettings(page = 'general') {
     <div class="desc vault-box" id="vault-box"><span class="cloud-dot" id="cloud-dot"></span><b>${tu('cloud')}</b> · <span id="cloud-state">…</span><br><span class="small">${tu('gateway')}</span></div>
     <h3>${ts('modelsList')}</h3>
     ${row(ts('defaultModel'), `<select class="text" id="st-default">${c.models.map((m) => `<option value="${m.key}" ${m.key === c.defaultModel ? 'selected' : ''}>${esc(m.label)} — ${esc(m.note?.[lang] || m.vendor || m.provider)}</option>`).join('')}</select>`)}
-    <div id="model-list">${c.models.filter((m) => m.key !== 'auto').map((m) => `<div class="model-row" data-key="${m.key}"><div><b>${esc(m.label)}</b> <span class="k">${esc(m.builtin ? ts('builtin') : m.vendor || m.provider)} · ${esc(I18N[lang]['tier_' + m.tier] ?? I18N.en['tier_' + m.tier] ?? m.tier ?? '')}</span></div><span class="pill test-res ${m.ready ? '' : 'off'}">${m.ready ? '' : ts('noKey')}</span><button class="btn sm test">${ts('test')}</button>${m.builtin ? '' : `<button class="ib sm del" data-tip="${ts('remove')}">${ico('trash')}</button>`}</div>`).join('')}</div>
+    <div id="model-list">${c.models.filter((m) => m.key !== 'auto').map((m) => `<div class="model-row" data-key="${m.key}"><div class="mr-main">${brandMark(m)}<b>${esc(m.label)}</b> <span class="k">${esc(m.builtin ? ts('builtin') : m.vendor || m.provider)} · ${esc(I18N[lang]['tier_' + m.tier] ?? I18N.en['tier_' + m.tier] ?? m.tier ?? '')}</span></div><span class="pill test-res ${m.ready ? '' : 'off'}">${m.ready ? '' : ts('noKey')}</span><button class="btn sm test">${ts('test')}</button>${m.builtin ? '' : `<button class="ib sm del" data-tip="${ts('remove')}">${ico('trash')}</button>`}</div>`).join('')}</div>
     <h3>${ts('providers')}</h3><p class="sub" style="margin-top:-6px">${ts('providersDesc')}</p>
-    <div id="prov-list">${Object.entries(c.providers).map(([id, p]) => `<div class="prov-row" data-id="${esc(id)}"><div class="prov-main"><b>${esc(p.name || id)}</b><span class="k mono">${esc((p.baseUrl || '').replace(/^https?:\/\//, ''))}</span><span class="small">${(p.models || []).length} ${ts('modelsN')} · ${p.keySet ? ts('keySet') : ts('noKey')}</span></div><button class="btn sm edit">${ts('edit')}</button><button class="ib sm del" data-tip="${ts('remove')}">${ico('trash')}</button></div>`).join('') || `<div class="empty small">${ts('noProviders')}</div>`}</div>
+    <div id="prov-list">${Object.entries(c.providers).map(([id, p]) => `<div class="prov-row" data-id="${esc(id)}"><div class="prov-main">${brandMark({ provider: id, vendor: id, label: p.name || id })}<b>${esc(p.name || id)}</b><span class="k mono">${esc((p.baseUrl || '').replace(/^https?:\/\//, ''))}</span><span class="small">${(p.models || []).length} ${ts('modelsN')} · ${p.keySet ? ts('keySet') : ts('noKey')}</span></div><button class="btn sm edit">${ts('edit')}</button><button class="ib sm del" data-tip="${ts('remove')}">${ico('trash')}</button></div>`).join('') || `<div class="empty small">${ts('noProviders')}</div>`}</div>
     <button class="btn primary" id="prov-add" style="margin-top:8px">${ico('plus')}${ts('addProvider')}</button>
     <div id="prov-editor" class="prov-editor hidden"></div>
   </div>
@@ -1000,10 +1202,23 @@ async function openSettings(page = 'general') {
     ${c.app && c.app.repo ? row('GitHub', `<a href="https://github.com/${esc(c.app.repo)}" target="_blank" rel="noopener" class="small mono">github.com/${esc(c.app.repo)}</a> <span class="small">— ${ts('github')}</span>`) : ''}
   </div>
 
-  <div style="display:flex;gap:8px;margin-top:22px;justify-content:flex-end;border-top:1px solid var(--line);padding-top:16px"><button class="btn" id="st-cancel">${T4({ en: 'Close', fa: 'بستن', ru: 'Закрыть', zh: '关闭' })}</button><button class="btn primary" id="st-save">${ico('check')}${t('save')}</button></div>`);
+  <div class="spage ${page === 'mcp' ? 'active' : ''}" data-p="mcp">
+    <p class="sub" style="margin-top:-4px">${ts('mcpDesc')}</p>
+    <div id="mcp-presets"><span class="small">${({ fa: 'پرسِت‌های آماده — یک کلیک، فرم پر شده:', en: 'Ready presets — one click fills the form:', ru: 'Готовые пресеты — один клик заполняет форму:', zh: '现成预设——一键填充表单：' })[lang] || 'Ready presets — one click fills the form:'}</span><div class="mcp-chips">${MCP_PRESETS.map((x) => `<button class="chip" data-p="${x.id}">${esc(x.label)}</button>`).join('')}</div></div>
+    <div id="mcp-box"><span class="small">…</span></div>
+    <div class="form-row" style="gap:8px"><button class="btn" id="mcp-add">${ico('plus')}${ts('mcpAdd')}</button><button class="btn" id="mcp-add-json">${ico('code')}${ts('mcpPaste')}</button></div>
+    <div id="mcp-form" class="hidden"></div>
+  </div>
+  </div>
+
+  <div class="st-foot"><button class="btn" id="st-cancel">${T4({ en: 'Close', fa: 'بستن', ru: 'Закрыть', zh: '关闭' })}</button><button class="btn primary" id="st-save">${ico('check')}${t('save')}</button></div>`);
+  $('#modal-body').classList.add('st-body');
 
   // tabs
   $$('#st-tabs button').forEach((b) => (b.onclick = () => { $$('#st-tabs button').forEach((x) => x.classList.toggle('active', x === b)); $$('.spage').forEach((x) => x.classList.toggle('active', x.dataset.p === b.dataset.p)); }));
+  $('#mcp-add').onclick = () => mcpShowForm(false);
+  $('#mcp-add-json').onclick = () => mcpShowForm(true);
+  if (page === 'mcp') loadMcpSettings();
   const segClick = (id, fn) => $$('#' + id + ' button').forEach((b) => (b.onclick = () => { $$('#' + id + ' button').forEach((x) => x.classList.toggle('active', x === b)); fn(b.dataset.v); }));
   const swClick = (id, fn) => { const s = $('#' + id); s.onclick = () => { const on = s.classList.toggle('on'); s.setAttribute('aria-checked', on); fn(on); }; };
   // updates + cloud status — state shared with the banner (see updBanner / paintUpdSettings)
@@ -1176,7 +1391,6 @@ document.onkeydown = (e) => {
 // ───────────────────────── titlebar / responsive ─────────────────────────
 $$('[data-win]').forEach((b) => (b.onclick = () => desktop && desktop.win(b.dataset.win)));
 async function setLang(v) { if (!I18N[v]) return; lang = v; applyLang(); await loadConfig(); api('/api/config', { method: 'POST', body: { lang } }); if (S.chat) openChat(S.chat.id); else renderChatList(S.chats); }
-$('#tb-lang').onclick = (e) => { e.stopPropagation(); const old = $('#lang-menu'); if (old) return old.remove(); const m = el('div', 'lang-menu'); m.id = 'lang-menu'; m.innerHTML = LANGS.map(([k, n]) => `<button data-l="${k}" class="${k === lang ? 'sel' : ''}"><span class="lm-name">${n}</span><span class="lm-code">${k.toUpperCase()}</span></button>`).join(''); $$('button', m).forEach((b) => (b.onclick = () => { m.remove(); setLang(b.dataset.l); })); document.body.appendChild(m); const r = $('#tb-lang').getBoundingClientRect(); m.style.top = r.bottom + 6 + 'px'; if (root.dir === 'rtl') m.style.left = r.left + 'px'; else m.style.right = (innerWidth - r.right) + 'px'; setTimeout(() => document.addEventListener('click', () => m.remove(), { once: true }), 0); };
 function fitLayout() {
   const w = window.innerWidth;
   if (w <= 1240) $('#rail').classList.add('collapsed'); else if (!S._railUser) $('#rail').classList.remove('collapsed');
@@ -1200,5 +1414,30 @@ document.addEventListener('click', (e) => { if (window.innerWidth > 1240) return
   S.upd = { dismissed: S.cfg.dismissedUpdate || '' };
   setTimeout(async () => { try { const u = await api('/api/update'); if (u.lastInstall) { if (u.lastInstall.ok) toast(tu('installedOk')(u.lastInstall.version), 'ok'); else toast(tu('installedFail')(u.lastInstall.version) + (u.lastInstall.note ? ' — ' + u.lastInstall.note : ''), 'err'); } if (u.available && S.cfg.autoUpdate !== false && (S.cfg.dismissedUpdate !== u.latest || (u.download && u.download.ready))) { if (u.download && u.download.ready) S.upd.dismissed = ''; updBanner(u); } else S.upd = { ...(S.upd || {}), ...u }; } catch (_) {} }, 2500);
 })();
+// ───────────────────────── selection copy bar ─────────────────────────
+// A floating Copy button over any selection in the thread: gives a reliable copy path even
+// where the embed/iframe blocks the keyboard shortcut or the Clipboard API.
+const selbar = el('div', 'selbar hidden'); selbar.id = 'selbar';
+selbar.innerHTML = `<button id="selbar-copy">${ico('copy')}<span></span></button>`;
+selbar.onmousedown = (e) => e.preventDefault(); // keep the selection alive while clicking the bar
+document.body.appendChild(selbar);
+$('#selbar-copy').onclick = () => copyFeedback(selbar._txt || getSelection().toString());
+let _selT;
+function updateSelbar() {
+  const s = getSelection(); const txt = s && !s.isCollapsed ? s.toString() : '';
+  const inThread = s && s.anchorNode && ($('#thread')?.contains(s.anchorNode) || $('#modal-body')?.contains(s.anchorNode));
+  if (!txt || !inThread) { selbar.classList.add('hidden'); return; }
+  const r = s.getRangeAt(0).getBoundingClientRect();
+  if (!r || (!r.width && !r.height)) { selbar.classList.add('hidden'); return; }
+  $('span', selbar).textContent = t('copy');
+  selbar.classList.remove('hidden');
+  const w = selbar.offsetWidth; const h = selbar.offsetHeight;
+  selbar.style.left = Math.min(Math.max(8, r.left + r.width / 2 - w / 2), innerWidth - w - 8) + 'px';
+  selbar.style.top = (r.top - h - 8 < 46 ? r.bottom + 8 : r.top - h - 8) + 'px';
+  selbar._txt = txt;
+}
+document.addEventListener('selectionchange', () => { clearTimeout(_selT); _selT = setTimeout(updateSelbar, 100); });
+$('#thread').addEventListener('scroll', () => { if (!selbar.classList.contains('hidden')) updateSelbar(); });
+
 window.ORCA = Object.assign(window.ORCA || {}, { previewFile, setPreviewFull, showHelp, openSettings, PV });
 })();

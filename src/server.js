@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const { URL } = require('url');
 const config = require('./core/config');
+const mcp = require('./core/mcp');
 const store = require('./core/store');
 const tools = require('./core/tools');
 const { runAgent, stopRun, approve, quick, routeAuto, routeAutoJudged, classifyRequest, compact } = require('./core/agent');
@@ -21,7 +22,9 @@ const json = (res, code, obj) => { res.writeHead(code, { 'content-type': 'applic
 const readBody = (req, max = 50 * 1024 * 1024) => new Promise((resolve) => { let b = ''; let n = 0; let over = false; req.on('data', (d) => { n += d.length; if (n > max) { if (!over) { over = true; console.warn('[api] request body exceeded limit — connection dropped'); req.destroy(); } return; } b += d; }); req.on('end', () => { try { resolve(b ? JSON.parse(b) : {}); } catch (_) { resolve({}); } }); req.on('error', () => resolve({})); });
 const readRaw = (req, max = 60 * 1024 * 1024) => new Promise((resolve, reject) => { const chunks = []; let n = 0; req.on('data', (d) => { n += d.length; if (n > max) { reject(new Error('file too large')); req.destroy(); } else chunks.push(d); }); req.on('end', () => resolve(Buffer.concat(chunks))); req.on('error', reject); });
 const IMG_EXT = /\.(png|jpe?g|gif|webp|bmp)$/i;
-const analysisCache = new Map(); // rel path -> analysis
+const analysisCache = new Map(); // rel path -> analysis (LRU-capped, see cacheSet)
+const CACHE_MAX = 50;
+function cacheSet(k, v) { analysisCache.set(k, v); if (analysisCache.size > CACHE_MAX) analysisCache.delete(analysisCache.keys().next().value); }
 
 // ---- SSE hub: each browser tab subscribes once; all run events broadcast with runId ----
 const clients = new Set();
@@ -34,9 +37,13 @@ tools.procs.setOnChange((pr) => broadcast({ event: 'proc', data: pr }));
 let boundHost = '127.0.0.1';
 function hasToken(req, url) {
   const tok = config.apiToken();
-  if (url.searchParams.get('token') === tok) return true; // EventSource cannot set headers
-  return req.headers['x-orca-token'] === tok || req.headers.authorization === 'Bearer ' + tok;
+  // EventSource cannot set headers, so /api/events may carry the token in the query string —
+  // nowhere else (a token in a URL leaks into logs, history and Referer headers).
+  if (url.pathname === '/api/events' && url.searchParams.get('token') === tok) return true;
+  return req.headers['x-orca-token'] === tok || req.headers.authorization === 'Bearer ' + tok || readCookie(req, 'orca-token') === tok;
 }
+const readCookie = (req, name) => { const c = String(req.headers.cookie || ''); const m = c.split(';').map((x) => x.trim()).find((x) => x.startsWith(name + '=')); return m ? decodeURIComponent(m.slice(name.length + 1)) : ''; };
+const isLoopbackReq = (req) => { try { const h = new URL('http://' + (req.headers.host || '')).hostname; return h === '127.0.0.1' || h === 'localhost' || h === '[::1]' || h === '::1'; } catch (_) { return false; } };
 function badOrigin(req) {
   const o = req.headers.origin;
   if (!o) return false;
@@ -102,7 +109,7 @@ async function handleApi(req, res, url) {
     fs.writeFileSync(fp, buf);
     const relPath = path.relative(config.workspaceDir(), fp).replace(/\\/g, '/');
     const out = { ok: true, path: relPath, bytes: buf.length, kind: IMG_EXT.test(name) ? 'image' : 'file' };
-    if (out.kind === 'image') { try { const a = await tools.extras.analyzeImage(fp, { ocr: true }); out.analysis = a; analysisCache.set(relPath, a); } catch (e) { out.analysis = { error: e.message }; } }
+    if (out.kind === 'image') { try { const a = await tools.extras.analyzeImage(fp, { ocr: true }); out.analysis = a; cacheSet(relPath, a); } catch (e) { out.analysis = { error: e.message }; } }
     else if (buf.length < 2e6 && !buf.includes(0)) out.text = buf.toString('utf8').slice(0, 60000);
     return json(res, 200, out);
   }
@@ -182,8 +189,26 @@ async function handleApi(req, res, url) {
     if (patch.providers && typeof patch.providers === 'object') for (const pv of Object.values(patch.providers)) if (pv && pv.apiKey && String(pv.apiKey).includes('…')) delete pv.apiKey; // masked value → keep stored key
     if (patch.judge && typeof patch.judge === 'object' && patch.judge.apiKey && String(patch.judge.apiKey).includes('…')) delete patch.judge.apiKey;
     if (patch.customModels) patch.customModels = patch.customModels.map((m) => { const old = config.load().customModels.find((x) => x.key === m.key); if (m.apiKey && m.apiKey.includes('…') && old) m.apiKey = old.apiKey; return m; });
+    if (patch.mcpServers && typeof patch.mcpServers === 'object') {
+      const oldSv = config.load().mcpServers || {};
+      for (const [n, sv] of Object.entries(patch.mcpServers)) {
+        if (!sv || typeof sv !== 'object') continue;
+        for (const field of ['env', 'headers']) if (sv[field] && oldSv[n] && oldSv[n][field])
+          for (const [k, v] of Object.entries(sv[field])) if (String(v).includes('…')) sv[field][k] = oldSv[n][field][k] ?? v; // masked → keep stored secret
+      }
+    }
     config.save(patch); return json(res, 200, config.publicView());
   }
+  if (p === '/api/mcp' && req.method === 'GET') return json(res, 200, { servers: mcp.snapshot() });
+  if (p === '/api/mcp' && req.method === 'POST') {
+    const { action, name } = body || {};
+    if (!name || typeof name !== 'string') return json(res, 400, { error: 'name required' });
+    if (action === 'restart') return json(res, 200, { ok: await mcp.restart(name) });
+    if (action === 'stop') return json(res, 200, { ok: mcp.stop(name) });
+    if (action === 'approve') return json(res, 200, { ok: mcp.approve(name) });
+    return json(res, 400, { error: 'unknown action' });
+  }
+  if (p === '/api/mcp/logs' && req.method === 'GET') return json(res, 200, { lines: mcp.logs(String(url.searchParams.get('name') || '')) });
   if (p === '/api/models/test' && req.method === 'POST') {
     const t0 = Date.now();
     try {
@@ -261,7 +286,7 @@ async function handleApi(req, res, url) {
       for (const im of images.slice(0, 8)) {
         const relPath = String(im.path || im).replace(/^\/+/, '');
         let a = analysisCache.get(relPath);
-        if (!a) { try { a = await tools.extras.analyzeImage(path.join(config.workspaceDir(), relPath), { ocr: true }); analysisCache.set(relPath, a); } catch (e) { a = { error: e.message }; } }
+        if (!a) { try { a = await tools.extras.analyzeImage(path.join(config.workspaceDir(), relPath), { ocr: true }); cacheSet(relPath, a); } catch (e) { a = { error: e.message }; } }
         blocks.push(`<attached_image path="${relPath}" size="${a.width || '?'}x${a.height || '?'}">\n${a.vision ? 'VISION (' + a.vision_model + '): ' + a.vision + '\n' : ''}${a.ocr_text ? 'OCR TEXT (confidence ' + a.ocr_confidence + '%):\n' + a.ocr_text : (a.vision ? '' : 'OCR found no readable text.')}${a.note && !a.vision ? '\nNOTE: ' + a.note : ''}\n</attached_image>`);
       }
       text = String(text || '') + '\n\n' + blocks.join('\n');
@@ -394,10 +419,19 @@ function serveStatic(req, res, url) {
   if (url.pathname === '/' || url.pathname === '/index.html') {
     // Inject the local API token into the page so the UI can authenticate. Only the quoted
     // placeholder value is replaced (never the variable name itself).
+    const nonce = require('crypto').randomBytes(16).toString('base64');
     const html = fs.readFileSync(fp, 'utf8')
-      .replace("'__ORCA_TOKEN__'", "'" + config.apiToken() + "'")
+      .replace(/__ORCA_NONCE__/g, nonce)
+      // S1: embedding the token is only safe for a browser on this machine; a peer reaching a
+      // 0.0.0.0 bind must present the token explicitly (URL handoff / cookie), never receive it.
+      // ORCA_WEB_OPEN=1 is the documented opt-out for reverse-proxied single-user setups.
+      .replace("'__ORCA_TOKEN__'", "'" + (isLoopbackReq(req) || process.env.ORCA_WEB_OPEN === '1' ? config.apiToken() : '') + "'")
       .replace("'__ORCA_PREVIEW__'", JSON.stringify(previewPort || ''));
-    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache' });
+    const hdr = { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer' };
+    // Loopback browsers also get the token as an HttpOnly SameSite=Strict cookie, so the UI keeps
+    // working even though the token is no longer readable from JavaScript by default.
+    if (isLoopbackReq(req) || process.env.ORCA_WEB_OPEN === '1') hdr['set-cookie'] = `orca-token=${encodeURIComponent(config.apiToken())}; Path=/; HttpOnly; SameSite=Strict`;
+    res.writeHead(200, hdr);
     return res.end(html);
   }
   const headers = { 'content-type': MIME[ext] || 'application/octet-stream', 'cache-control': /\/vendor\/|\/assets\//.test(fp) ? 'public, max-age=86400' : 'no-cache' };
@@ -486,8 +520,12 @@ if (require.main === module) {
   const host = process.env.HOST || '127.0.0.1';
   listen(port, host).then(({ port }) => {
     console.log(`ORCA web mode → http://${host === '0.0.0.0' ? 'localhost' : host}:${port}  data: ${config.getDataDir()}`);
-    if (host === '0.0.0.0') console.log('WARNING: listening on all interfaces — a per-install token still protects the API, but prefer a firewall or reverse proxy with auth.');
+    if (host === '0.0.0.0') console.log('WARNING: listening on all interfaces. The UI is served WITHOUT the embedded API token to anyone but this machine; a remote browser must be given the token explicitly (it grants FULL control of the agent, including shell):\n  http://<this-host>:' + port + '/?token=' + config.apiToken() + '\nPrefer a firewall or a reverse proxy with auth.');
   });
 }
+
+// MCP: warm direct-mode servers shortly after boot (background, never blocks startup)
+const _mcpWarm = setTimeout(() => { try { mcp.warm(); } catch (_) {} }, 2000); if (_mcpWarm.unref) _mcpWarm.unref();
+for (const sig of ['exit', 'SIGINT', 'SIGTERM']) process.on(sig, () => { try { mcp.shutdownAll(); } catch (_) {} });
 
 module.exports = { listen, createServer };

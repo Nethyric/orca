@@ -137,7 +137,7 @@ function allModels() {
   const c = load();
   const list = builtinModels().map((m) => ({ ...m, builtin: true }));
   for (const [pid, pv] of Object.entries(c.providers || {})) {
-    for (const m of (pv.models || [])) list.push({ key: `${pid}/${m.id}`, label: m.name || m.id, vendor: pv.name || pid, provider: pid, model: m.id, maxTokens: m.maxTokens || 8192, tier: m.tier || 'custom', builtin: false, reasoning: !!m.reasoning, toolCall: m.toolCall !== false });
+    for (const m of (pv.models || [])) list.push({ key: `${pid}/${m.id}`, label: m.name || m.id, vendor: pv.name || pid, provider: pid, model: m.id, maxTokens: m.maxTokens || 8192, context: m.context || 0, tier: m.tier || 'custom', builtin: false, reasoning: !!m.reasoning, toolCall: m.toolCall !== false });
   }
   for (const m of c.customModels) list.push({ ...m, builtin: false, tier: m.tier || 'custom' });
   return list;
@@ -171,16 +171,21 @@ function fallbackOrder(primary) {
 
 function publicView() {
   const c = load();
-  const mask = (k) => (k ? k.slice(0, 4) + '…' + k.slice(-4) : '');
-  const { providers: pvs, ...rest } = c;
+  const mask = (k) => (k ? (k.length <= 12 ? '••••…' + k.slice(-2) : k.slice(0, 4) + '…' + k.slice(-4)) : '');
+  const { providers: pvs, braveApiKey, ...rest } = c;
   return {
     ...rest,
+    braveKeySet: !!braveApiKey, braveApiKey: mask(braveApiKey),
     providers: Object.fromEntries(Object.entries(pvs || {}).map(([id, p]) => [id, { ...p, apiKey: mask(p.apiKey), keySet: !!p.apiKey, models: p.models || [] }])),
     customModels: c.customModels.map((m) => ({ ...m, apiKey: m.apiKey ? mask(m.apiKey) : '' })),
     vision: { ...c.vision, apiKey: mask(c.vision.apiKey), keySet: !!c.vision.apiKey },
     imageGen: { ...c.imageGen, apiKey: mask(c.imageGen.apiKey), keySet: !!c.imageGen.apiKey },
     videoGen: { ...c.videoGen, apiKey: mask(c.videoGen.apiKey), keySet: !!c.videoGen.apiKey },
     judge: { ...c.judge, apiKey: mask(c.judge.apiKey), keySet: !!c.judge.apiKey },
+    mcpServers: Object.fromEntries(Object.entries(c.mcpServers || {}).map(([n, sv]) => [n, { ...sv,
+      env: Object.fromEntries(Object.entries(sv.env || {}).map(([k, v]) => [k, mask(String(v))])),
+      headers: Object.fromEntries(Object.entries(sv.headers || {}).map(([k, v]) => [k, mask(String(v))])),
+      envSet: Object.keys(sv.env || {}).length, headersSet: Object.keys(sv.headers || {}).length }])),
     version: (() => { try { return require('../../package.json').version; } catch (_) { return ''; } })(),
     dataDir: getDataDir(),
     workspaceDir: workspaceDir(),

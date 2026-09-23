@@ -4,6 +4,28 @@ All notable changes to ORCA are documented here. The format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [1.0.0] — 2026-09-23
+
+First stable release.
+
+### Added
+- **MCP (Model Context Protocol) client.** Connect external tool servers from Settings → MCP over `stdio` or Streamable HTTP (with a legacy SSE fallback), import a Claude Desktop `mcpServers` config as-is, or add a ready-made preset (Filesystem, Fetch, Git, GitHub, Memory, Brave Search, Playwright, Hugging Face) in one click. Servers spawn lazily, reconnect quietly, expose per-tool toggles, and can run in `compact` mode so their schemas stay out of the context until needed. Tool manifests are fingerprinted to detect silent redefinition, and every MCP result is treated as untrusted content.
+- **Documentation website** at [nethyric.github.io/orca](https://nethyric.github.io/orca/), published automatically from this repository.
+- New guides: [MCP](docs/mcp.md) and [Updates & releases](docs/updates.md).
+- `.deb` package for Linux x64, alongside the AppImage and tar.gz.
+
+### Changed
+- **Editing tools are now atomic and precise.** `edit_file` matches with whitespace-tolerant fuzzy search, applies multi-file edits all-or-nothing, verifies syntax after every write (and restores the file if the result does not parse), reports `code_refs` and `failing_at` for tests, and discovers `related_tests` for the files it touches. `grep` supports whole-word matching, and the repository map focuses the model on the symbols that matter.
+- **The coding loop** plans first, edits in small verified steps, runs the project's tests after changes, and keeps going until they pass.
+- **Provider editor rebuilt** around a searchable, themed picker with real provider branding (logo, base URL, get-a-key link, model discovery, connection test); custom providers can carry their own logo via a URL, with a monogram fallback.
+- **Single brand mark per message**, shown everywhere models appear (chat, model picker, provider list, settings).
+- Copy/paste now works across every text surface of the UI (code blocks, diffs, tool results, chat), and live edits render as professional diff cards.
+- The language setting lives in exactly one place (Settings → General) with a segmented control for English, فارسی, Русский and 中文.
+- Release pipeline: macOS builds are produced per architecture (x64 and arm64) with matching bundled binaries, and release notes are generated from this changelog.
+
+### Tests
+- New suites: `mcp.test.js` (client, presets, transport fallback), `coding.test.js` (edit engine, multi-edit atomicity, test discovery), `stress.test.js` (an end-to-end engineering exercise: ORCA builds and debugs a chess engine to exact perft counts through its real coding stack). Full chain: 8 suites, all green.
+
 ## [0.0.8] — 2026-09-19
 
 ### Security

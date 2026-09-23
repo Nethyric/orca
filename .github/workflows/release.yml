@@ -18,19 +18,28 @@ jobs:
         include:
           - name: Windows x64
             os: ubuntu-latest
+            artifact: win
             target: win
-            script: dist:win
             arch: x64
-          - name: macOS (x64 + arm64)
-            os: macos-14
+            cmd: npm run dist:win
+          - name: macOS x64
+            os: macos-13
+            artifact: mac-x64
             target: mac
-            script: dist:mac
+            arch: x64
+            cmd: node scripts/bake.js && npx electron-builder --publish never --mac --x64 && node scripts/finish-unix.js mac
+          - name: macOS arm64
+            os: macos-14
+            artifact: mac-arm64
+            target: mac
             arch: arm64
+            cmd: node scripts/bake.js && npx electron-builder --publish never --mac --arm64 && node scripts/finish-unix.js mac
           - name: Linux x64
             os: ubuntu-latest
+            artifact: linux
             target: linux
-            script: dist:linux
             arch: x64
+            cmd: npm run dist:linux
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -48,17 +57,21 @@ jobs:
         env:
           ORCA_VAULT_KEY: ${{ secrets.ORCA_VAULT_KEY }}
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-        run: npm run ${{ matrix.script }}
+        run: ${{ matrix.cmd }}
       - name: Collect artifacts
         shell: bash
         run: |
           mkdir -p out
-          cp release/ORCA-Agent-*.zip release/ORCA-Agent-*.dmg release/ORCA-Agent-*.AppImage release/ORCA-Agent-*.tar.gz out/ 2>/dev/null || true
+          cp release/ORCA-Agent-*.zip out/ 2>/dev/null || true
+          cp release/ORCA-Agent-*.dmg out/ 2>/dev/null || true
+          cp release/ORCA-Agent-*.AppImage out/ 2>/dev/null || true
+          cp release/ORCA-Agent-*.tar.gz out/ 2>/dev/null || true
+          cp release/ORCA-Agent-*.deb out/ 2>/dev/null || true
           cp release/README-*.txt out/ 2>/dev/null || true
           ls -la out
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.target }}
+          name: ${{ matrix.artifact }}
           path: out/*
           if-no-files-found: error
 
@@ -77,14 +90,31 @@ jobs:
           rm -f SHA256SUMS
           sha256sum ORCA-Agent-* > SHA256SUMS
           cat SHA256SUMS
+      - name: Release notes from CHANGELOG.md
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          python3 - "$VER" <<'PY'
+          import re, sys
+          ver = sys.argv[1]
+          md = open('CHANGELOG.md', encoding='utf-8').read()
+          m = re.search(r'^## \[' + re.escape(ver) + r'\][^\n]*\n(.*?)(?=^## \[|\Z)', md, re.S | re.M)
+          body = (m.group(1).strip() if m else '') or f'ORCA {ver} — see the changelog for details.'
+          head = f'ORCA {ver} — download the package for your system below.\n\n'
+          tail = ('\n\n---\n\nEvery package is listed in `SHA256SUMS`; the desktop app verifies updates '
+                  'against it automatically (Settings → Updates).')
+          open('dist/RELEASE-NOTES.md', 'w', encoding='utf-8').write(head + body + tail + '\n')
+          print(open('dist/RELEASE-NOTES.md', encoding='utf-8').read())
+          PY
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ github.ref_name }}
+          name: ORCA ${{ github.ref_name }}
+          body_path: dist/RELEASE-NOTES.md
           files: |
             dist/ORCA-Agent-*
             dist/README-*.txt
             dist/SHA256SUMS
             remote/vault.json
-          generate_release_notes: true
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}

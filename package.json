@@ -1,7 +1,7 @@
 {
   "name": "orca-agent",
   "productName": "ORCA Agent",
-  "version": "0.0.8",
+  "version": "1.0.0",
   "description": "ORCA \u2014 autonomous multi-model AI agent for your desktop. Open source by Nethyric.",
   "main": "src/main.js",
   "author": "Nethyric",
@@ -15,7 +15,7 @@
     "vault:keygen": "node scripts/vault.js keygen --write",
     "vault:seal": "node scripts/vault.js seal remote/vault.json",
     "vault:check": "node scripts/vault.js check",
-    "test": "node test/stream.test.js && node test/judge.test.js && node test/update.test.js && node test/security.test.js && node test/hardening.test.js",
+    "test": "node test/stream.test.js && node test/judge.test.js && node test/update.test.js && node test/security.test.js && node test/hardening.test.js && node test/mcp.test.js && node test/coding.test.js && node test/stress.test.js",
     "dist:mac": "node scripts/bake.js && electron-builder --publish never --mac --x64 --arm64 && node scripts/finish-unix.js mac",
     "dist:linux": "node scripts/bake.js && electron-builder --publish never --linux --x64 && node scripts/finish-unix.js linux"
   },
@@ -146,6 +146,12 @@
           "arch": [
             "x64"
           ]
+        },
+        {
+          "target": "deb",
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "icon": "assets/icon.png",
@@ -166,6 +172,7 @@
   "dependencies": {
     "docx": "^9.7.1",
     "exceljs": "^4.4.0",
+    "jszip": "^3.10.1",
     "mammoth": "^1.12.2",
     "pdf-parse": "^1.1.1",
     "pptxgenjs": "^4.0.1",

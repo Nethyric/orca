@@ -10,3 +10,6 @@ assets/tessdata/*
 
 # generated at build time (contains the vault private key)
 src/build-info.json
+
+# generated documentation site
+site/

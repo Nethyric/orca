@@ -56,7 +56,11 @@ function makeProcs({ spawn, spawnSpec, childEnv, killTree, WS, isWin }) {
     const spec = spawnSpec(String(command), shell);
     const dir = cwd || WS();
     const id = 'p' + (++seq).toString(36) + Date.now().toString(36).slice(-3);
-    const safeEnv = {}; for (const [k, v] of Object.entries(env || {})) if (/^[A-Z_][A-Z0-9_]*$/i.test(k)) safeEnv[k] = String(v);
+    // Only plain variable names, and never the ones that change how loaders/shells/interpreters
+    // behave (LD_PRELOAD, NODE_OPTIONS, BASH_ENV, PATH, …) — those would let the env block alone
+    // execute code outside the approval flow.
+    const ENV_DENY = /^(LD_|DYLD_|NODE_OPTIONS|BASH_ENV|^ENV$|SHELL|PATH|HOMEPATH|HOME|USER|PYTHONSTARTUP|PYTHONPATH|PERL5OPT|RUBYOPT|ELECTRON_RUN_AS_NODE|SUDO_COMMAND|PROMPT_COMMAND|PS4|IFS|CDPATH|GCONV_PATH|GETCONF_DIR)/i;
+    const safeEnv = {}; for (const [k, v] of Object.entries(env || {})) if (/^[A-Z_][A-Z0-9_]*$/i.test(k) && !ENV_DENY.test(k)) safeEnv[k] = String(v);
     let child;
     try { child = spawn(spec.cmd, spec.args, { cwd: dir, windowsHide: true, detached: !isWin, env: { ...childEnv(), ...safeEnv, PYTHONUNBUFFERED: '1', FORCE_COLOR: '0' }, stdio: ['ignore', 'pipe', 'pipe'], ...spec.opts }); }
     catch (e) { return { error: 'spawn failed: ' + e.message }; }

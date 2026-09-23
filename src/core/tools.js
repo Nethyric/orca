@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const { execSync, execFileSync, spawn } = require('child_process');
 const config = require('./config');
+const mcp = require('./mcp');
 
 const isWin = process.platform === 'win32';
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
@@ -13,9 +14,42 @@ function safe(p) {
   const root = path.resolve(WS());
   const full = path.resolve(root, p || '.');
   if (full !== root && !full.startsWith(root + path.sep)) throw new Error('path escapes workspace: ' + p);
+  // Symlink escape: a link inside the workspace may point anywhere, so the *real* path must stay
+  // inside the real workspace root too (checked on the deepest existing ancestor for new files).
+  try {
+    const rootReal = fs.realpathSync(root);
+    let cur = full; const rest = [];
+    while (!fs.existsSync(cur)) { const b = path.basename(cur); if (!b) break; rest.unshift(b); cur = path.dirname(cur); }
+    const real = path.join(fs.realpathSync(cur), ...rest);
+    if (real !== rootReal && !real.startsWith(rootReal + path.sep)) throw new Error('path escapes workspace: ' + p);
+  } catch (e) { if (e.code !== 'ENOENT') throw e; }
   return full;
 }
 const rel = (f) => path.relative(path.resolve(WS()), f).replace(/\\/g, '/') || '.';
+// change-context (dsh-code-index style): which test files reference the file being changed?
+const CODE_EXT = /\.(js|mjs|cjs|ts|tsx|py|go|rs|java)$/i;
+function likelyTests(relP) {
+  const base = path.basename(relP).replace(/\.[^.]+$/, '').toLowerCase();
+  if (!base || base.length < 3 || /test|spec|fixture|mock|util|helper/.test(base)) return [];
+  const root = WS(); const hits = []; let scanned = 0;
+  const skip = new Set(['node_modules', '.git', 'dist', 'build', '.next', '.nuxt', '.venv', 'venv', '__pycache__', 'coverage', '.cache', 'target', 'out']);
+  (function rec(d) {
+    let ents; try { ents = fs.readdirSync(d, { withFileTypes: true }); } catch (_) { return; }
+    for (const e of ents) {
+      if (skip.has(e.name) || scanned > 30 || hits.length >= 3) continue;
+      const fp = path.join(d, e.name);
+      if (e.isDirectory()) { if (!/^(node_modules|dist|build)$/.test(e.name)) rec(fp); continue; }
+      const isTestName = /(^|[./_-])(test|spec)s?\./i.test(e.name) || /^(test|tests|__tests__|spec|specs)$/i.test(path.basename(d));
+      if (!isTestName || !CODE_EXT.test(e.name)) continue;
+      let st; try { st = fs.statSync(fp); } catch (_) { continue; }
+      if (st.size > 200000) continue;
+      scanned++;
+      let txt; try { txt = fs.readFileSync(fp, 'utf8'); } catch (_) { continue; }
+      if (txt.toLowerCase().includes(base)) hits.push(path.relative(root, fp).replace(/\\/g, '/'));
+    }
+  })(root);
+  return hits;
+}
 const strip = (x) => String(x || '').replace(/<[^>]*>/g, ' ')
   .replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#x27;|&#39;/g, "'")
   .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&nbsp;|&#160;/g, ' ')
@@ -23,12 +57,39 @@ const strip = (x) => String(x || '').replace(/<[^>]*>/g, ' ')
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// ---- SSRF guard: agent tools must not reach loopback / link-local / private networks ----
+const net = require('net');
+const dns = require('dns');
+function badIp(ip) {
+  if (net.isIPv4(ip)) {
+    const a = ip.split('.').map(Number);
+    return a[0] === 127 || a[0] === 10 || a[0] === 0 || (a[0] === 169 && a[1] === 254) || (a[0] === 172 && a[1] >= 16 && a[1] <= 31) || (a[0] === 192 && a[1] === 168) || (a[0] >= 224 && a[0] <= 247);
+  }
+  if (net.isIPv6(ip)) { const l = ip.toLowerCase(); return l === '::1' || l === '::' || l.startsWith('fc') || l.startsWith('fd') || l.startsWith('fe80') || l.startsWith('::ffff:'); }
+  return true;
+}
+async function assertExternalUrl(url) {
+  const u = new URL(url);
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new Error('only http(s) URLs are allowed');
+  const host = u.hostname.replace(/^\[|\]$/g, '');
+  const ips = net.isIP(host) ? [host] : await dns.promises.resolve(host).catch(() => []);
+  if (!ips.length) return u; // let fetch produce the DNS error
+  if (ips.some(badIp)) throw new Error('refused: internal/loopback address is not reachable from agent tools');
+  return u;
+}
 async function fetchText(url, opts = {}, timeoutMs = 25000) {
   const ctl = new AbortController();
   const t = setTimeout(() => ctl.abort(), timeoutMs);
   try {
-    const r = await fetch(url, { redirect: 'follow', ...opts, headers: { 'user-agent': UA, accept: 'text/html,application/json;q=0.9,*/*;q=0.8', 'accept-language': 'en-US,en;q=0.9,fa;q=0.8', ...(opts.headers || {}) }, signal: ctl.signal });
-    return { status: r.status, text: await r.text(), ct: r.headers.get('content-type') || '' };
+    let cur = String(url);
+    // follow redirects manually so every hop passes the SSRF check
+    for (let hop = 0; hop < 6; hop++) {
+      await assertExternalUrl(cur);
+      const r = await fetch(cur, { ...opts, redirect: 'manual', headers: { 'user-agent': UA, accept: 'text/html,application/json;q=0.9,*/*;q=0.8', 'accept-language': 'en-US,en;q=0.9,fa;q=0.8', ...(opts.headers || {}) }, signal: ctl.signal });
+      if ([301, 302, 303, 307, 308].includes(r.status)) { const loc = r.headers.get('location'); if (!loc) return { status: r.status, text: '', ct: '' }; cur = new URL(loc, cur).href; continue; }
+      return { status: r.status, text: await r.text(), ct: r.headers.get('content-type') || '' };
+    }
+    return { status: 310, text: 'too many redirects', ct: '' };
   } finally { clearTimeout(t); }
 }
 
@@ -132,7 +193,7 @@ const impl = {
   async run_node({ code, timeout = 90 }) {
     const f = path.join(WS(), '.orca_snippet.js');
     fs.writeFileSync(f, code, 'utf8');
-    const node = process.versions.electron ? process.execPath : process.execPath;
+    const node = process.execPath;
     const env = { ...childEnv(), ...(process.versions.electron ? { ELECTRON_RUN_AS_NODE: '1' } : {}) };
     return new Promise((resolve) => {
       let out = ''; let done = false;
@@ -178,8 +239,8 @@ const impl = {
     const before = existed ? fs.readFileSync(f, 'utf8') : null;
     const after = append && existed ? before + content : content;
     fs.writeFileSync(f, after, 'utf8');
-    const check = await impl._check(f);
-    return { ok: true, path: rel(f), bytes: Buffer.byteLength(after), lines: after.split('\n').length, created: !existed, appended: !!(append && existed), ...(check ? { syntax: check.ok ? 'ok' : 'ERROR: ' + check.message } : {}), _diff: { path: rel(f), before, after } };
+    const check = await impl._check(f); const rt = CODE_EXT.test(f) ? likelyTests(rel(f)) : [];
+    return { ok: true, path: rel(f), bytes: Buffer.byteLength(after), lines: after.split('\n').length, created: !existed, appended: !!(append && existed), ...(check ? { syntax: check.ok ? 'ok' : 'ERROR: ' + check.message } : {}), ...(rt.length ? { related_tests: rt, verify: 'run run_tests — these test files reference the changed file' } : {}), _diff: { path: rel(f), before, after } };
   },
 
   async read_file({ path: p, offset = 0, limit = 400 }) {
@@ -193,22 +254,80 @@ const impl = {
     return { path: p, total_lines: lines.length, offset, content: slice.join('\n').slice(0, 40000) };
   },
 
-  async edit_file({ path: p, old, new: nw, all = false }) {
+  // apply one anchored replacement (exact, or whitespace-fuzzy line-based) to a text
+  applyOne(text, o, n, all, mode) {
+    if (mode === 'fuzzy') {
+      const norm = (x) => x.replace(/\r\n/g, '\n').split('\n').map((l) => l.replace(/[ \t]+$/, '')).join('\n');
+      const nt = norm(text), no = norm(o);
+      const startLine = nt.slice(0, nt.indexOf(no)).split('\n').length - 1;
+      const nLines = no.split('\n').length;
+      const lines = text.replace(/\r\n/g, '\n').split('\n');
+      return [...lines.slice(0, startLine), ...String(n).replace(/\r\n/g, '\n').split('\n'), ...lines.slice(startLine + nLines)].join('\n');
+    }
+    return all ? text.split(o).join(n) : text.replace(o, () => n);
+  },
+
+  async edit_file({ path: p, old, new: nw, all = false, edits }) {
     const f = safe(p);
     if (!fs.existsSync(f)) return { error: 'not found: ' + p };
+    if (Array.isArray(edits)) {
+      // atomic multi-edit: validate EVERY anchor against the rolling text first, then apply all-or-nothing
+      const before = fs.readFileSync(f, 'utf8');
+      let roll = before; const prep = [];
+      for (let i = 0; i < edits.length; i++) {
+        const e = edits[i] || {}; const o = String(e.old ?? ''); const n = String(e.new ?? '');
+        if (!o) return { error: `edits[${i}]: "old" is required — nothing was applied (atomic)`, applied: 0 };
+        let mode = 'exact';
+        if (!roll.includes(o)) {
+          const norm = (x) => x.replace(/\r\n/g, '\n').split('\n').map((l) => l.replace(/[ \t]+$/, '')).join('\n');
+          const nt = norm(roll), no = norm(o);
+          if (!no || !nt.includes(no)) return { error: `edits[${i}]: old text not found — nothing was applied (atomic). Read the file and copy the exact text.`, applied: 0 };
+          const first = nt.indexOf(no);
+          if (!e.all && nt.indexOf(no, first + no.length) !== -1) return { error: `edits[${i}]: matches multiple times — set all:true on that edit or add surrounding context. Nothing was applied (atomic).`, applied: 0 };
+          mode = 'fuzzy';
+        }
+        prep.push({ o, n, all: !!e.all, mode });
+        roll = impl.applyOne(roll, o, n, !!e.all, mode);
+      }
+      let after = before; let replaced = 0;
+      for (const q of prep) { const c = after.split(q.o).length - 1; after = impl.applyOne(after, q.o, q.n, q.all, q.mode); replaced += q.mode === 'fuzzy' ? 1 : (q.all ? c : 1); }
+      fs.writeFileSync(f, after, 'utf8');
+      const check = await impl._check(f); const rt = CODE_EXT.test(f) ? likelyTests(rel(f)) : [];
+      return { ok: true, path: rel(f), edits: prep.length, replaced, atomic: true, ...(check ? { syntax: check.ok ? 'ok' : 'ERROR: ' + check.message } : {}), ...(rt.length ? { related_tests: rt, verify: 'run run_tests — these test files reference the changed file' } : {}), _diff: { path: rel(f), before, after } };
+    }
     const t = fs.readFileSync(f, 'utf8');
     if (!t.includes(old)) {
-      // fuzzy: try trimmed-lines match
-      const norm = (s) => s.split('\n').map((l) => l.trim()).join('\n');
-      const ni = norm(t).indexOf(norm(old));
-      if (ni === -1) return { error: 'old text not found in file. Read the file again and copy the exact text.' };
-      return { error: 'old text differs in whitespace/indentation. Copy the exact text including indentation.' };
+      // fuzzy layer 1: ignore CRLF + trailing whitespace; apply a unique match line-based
+      const norm = (x) => x.replace(/\r\n/g, '\n').split('\n').map((l) => l.replace(/[ \t]+$/, '')).join('\n');
+      const nt = norm(t), no = norm(old);
+      if (no && nt.includes(no)) {
+        const first = nt.indexOf(no), second = nt.indexOf(no, first + no.length);
+        if (second !== -1) return { error: 'old text matches multiple times after whitespace normalization. Set all=true or add surrounding context.' };
+        if (!all) {
+          const startLine = nt.slice(0, first).split('\n').length - 1;
+          const nLines = no.split('\n').length;
+          const lines = t.replace(/\r\n/g, '\n').split('\n');
+          const after = [...lines.slice(0, startLine), ...String(nw).replace(/\r\n/g, '\n').split('\n'), ...lines.slice(startLine + nLines)].join('\n');
+          fs.writeFileSync(f, after, 'utf8');
+          const check = await impl._check(f); const rt = CODE_EXT.test(f) ? likelyTests(rel(f)) : [];
+          return { ok: true, path: rel(f), replaced: 1, fuzzy: 'whitespace-insensitive match (CRLF/trailing spaces ignored)', ...(check ? { syntax: check.ok ? 'ok' : 'ERROR: ' + check.message } : {}), ...(rt.length ? { related_tests: rt, verify: 'run run_tests — these test files reference the changed file' } : {}), _diff: { path: rel(f), before: t, after } };
+        }
+      }
+      // fuzzy layer 2: fully trimmed match → indentation differs
+      const trimN = (x) => x.split('\n').map((l) => l.trim()).join('\n');
+      if (trimN(t).includes(trimN(old))) return { error: 'old text differs in whitespace/indentation. Copy the exact text including indentation.' };
+      // closest-line hint so the model repairs its anchor fast
+      const want = String(old).split('\n').map((l) => l.trim()).filter(Boolean)[0] || '';
+      const lines = t.split('\n');
+      let best = -1, bestScore = 0;
+      if (want.length >= 8) for (let i = 0; i < lines.length; i++) { const l = lines[i].trim(); if (!l) continue; let sc = 0; for (let k = 0; k < Math.min(l.length, want.length); k++) { if (l[k] === want[k]) sc++; else break; } if (sc > bestScore) { bestScore = sc; best = i; } }
+      return { error: 'old text not found in file.' + (best >= 0 && bestScore >= 8 ? ` Closest line ${best + 1}: ${lines[best].trim().slice(0, 120)}` : '') + ' Read the file again and copy the exact text.' };
     }
     const count = t.split(old).length - 1;
     const after = all ? t.split(old).join(nw) : t.replace(old, () => nw);
     fs.writeFileSync(f, after, 'utf8');
-    const check = await impl._check(f);
-    return { ok: true, path: rel(f), replaced: all ? count : 1, remaining_occurrences: all ? 0 : count - 1, ...(check ? { syntax: check.ok ? 'ok' : 'ERROR: ' + check.message } : {}), _diff: { path: rel(f), before: t, after } };
+    const check = await impl._check(f); const rt = CODE_EXT.test(f) ? likelyTests(rel(f)) : [];
+    return { ok: true, path: rel(f), replaced: all ? count : 1, remaining_occurrences: all ? 0 : count - 1, ...(check ? { syntax: check.ok ? 'ok' : 'ERROR: ' + check.message } : {}), ...(rt.length ? { related_tests: rt, verify: 'run run_tests — these test files reference the changed file' } : {}), _diff: { path: rel(f), before: t, after } };
   },
 
   async delete_file({ path: p }) {
@@ -284,7 +403,8 @@ const impl = {
       } catch (e) { errors.push('brave-api: ' + (e.message || e)); }
     }
     const ddg = async () => {
-      const r = await fetchText('https://lite.duckduckgo.com/lite/?q=' + encodeURIComponent(query), {}, 12000);
+      let r = await fetchText('https://lite.duckduckgo.com/lite/?q=' + encodeURIComponent(query), {}, 12000).catch(() => null);
+      if (!r || r.status !== 200) r = await fetchText('https://html.duckduckgo.com/html/?q=' + encodeURIComponent(query), {}, 12000);
       if (r.status === 202 || r.status === 429) throw new Error('ddg ' + r.status);
       const html = r.text.replace(/<tr class=["']result-sponsored["'][\s\S]*?<\/tr>/g, '');
       const results = [];
@@ -367,7 +487,8 @@ const impl = {
 
   async http_request({ url, method = 'GET', headers = {}, body }) {
     try {
-      const r = await fetch(url, { method, headers: { 'user-agent': UA, ...headers }, body: body != null ? (typeof body === 'string' ? body : JSON.stringify(body)) : undefined });
+      await assertExternalUrl(url);
+      const r = await fetch(url, { method, redirect: 'manual', headers: { 'user-agent': UA, ...headers }, body: body != null ? (typeof body === 'string' ? body : JSON.stringify(body)) : undefined });
       const text = await r.text();
       return { status: r.status, untrusted: true, headers: Object.fromEntries([...r.headers.entries()].slice(0, 20)), body: text.slice(0, 20000) };
     } catch (e) { return { error: e.message }; }
@@ -416,7 +537,7 @@ const SCHEMAS = [
   { type: 'function', function: { name: 'run_python', description: 'Execute a Python 3 snippet and return stdout. Only if Python is installed; otherwise prefer run_node.', parameters: { type: 'object', properties: { code: { type: 'string' }, timeout: { type: 'integer' } }, required: ['code'] } } },
   { type: 'function', function: { name: 'write_file', description: 'Create or overwrite a file in the workspace with full content. Parent folders are created automatically. HARD LIMIT: keep each call under ~5000 characters (≈100 lines of code, ≈50 lines of prose) — for bigger files write the first part, then continue with append=true in further calls, or split the code into several small modules.', parameters: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' }, append: { type: 'boolean', description: 'true = append content to the end of the existing file instead of overwriting' } }, required: ['path', 'content'] } } },
   { type: 'function', function: { name: 'read_file', description: 'Read a workspace file (optionally a line range).', parameters: { type: 'object', properties: { path: { type: 'string' }, offset: { type: 'integer', description: 'start line (0-based)' }, limit: { type: 'integer', description: 'max lines, default 400' } }, required: ['path'] } } },
-  { type: 'function', function: { name: 'edit_file', description: 'Precise edit: replace the exact text `old` with `new` in a file. `old` must match exactly (including indentation). Set all=true to replace every occurrence.', parameters: { type: 'object', properties: { path: { type: 'string' }, old: { type: 'string' }, new: { type: 'string' }, all: { type: 'boolean' } }, required: ['path', 'old', 'new'] } } },
+  { type: 'function', function: { name: 'edit_file', description: 'Precise edit: replace the exact text `old` with `new` in a file. `old` must match exactly (including indentation); whitespace-only drift (CRLF/trailing spaces) is tolerated. Set all=true to replace every occurrence. For several anchors in ONE file pass edits:[{old,new,all?}] instead of old/new — atomic: all anchors are validated before anything is written, so a bad anchor leaves the file untouched.', parameters: { type: 'object', properties: { path: { type: 'string' }, old: { type: 'string' }, new: { type: 'string' }, all: { type: 'boolean' }, edits: { type: 'array', description: 'atomic multi-edit for one file', items: { type: 'object', properties: { old: { type: 'string' }, new: { type: 'string' }, all: { type: 'boolean' } }, required: ['old', 'new'] } } }, required: ['path'] } } },
   { type: 'function', function: { name: 'delete_file', description: 'Delete a file or folder in the workspace.', parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } } },
   { type: 'function', function: { name: 'list_files', description: 'List files and folders in the workspace (recursive tree).', parameters: { type: 'object', properties: { path: { type: 'string' }, depth: { type: 'integer' } } } } },
   { type: 'function', function: { name: 'search_files', description: 'Grep: search file contents in the workspace with a regex. Returns file, line number and matching text.', parameters: { type: 'object', properties: { pattern: { type: 'string' }, path: { type: 'string' }, glob: { type: 'string', description: 'e.g. *.js or src/**/*.py' }, max_results: { type: 'integer' } }, required: ['pattern'] } } },
@@ -437,6 +558,7 @@ const DANGEROUS_RAW = /(:\(\)\s*\{|>\s*\/(dev\/sd[a-z]?|etc\/(passwd|shadow|sudo
 SCHEMAS.push(...office.SCHEMAS, ...extras.SCHEMAS);
 
 function riskOf(name, args) {
+  if (mcp.isMcp(name)) return 'medium'; // unknown third-party tools always worth a confirmation in ask mode
   if (name === 'run_shell' || name === 'start_process') {
     const cmd = String(args.command || '');
     return (DANGEROUS.test(cmd) || DANGEROUS_RAW.test(cmd)) ? 'high' : 'medium';
@@ -451,9 +573,10 @@ function riskOf(name, args) {
 }
 
 async function callTool(name, args) {
+  if (mcp.isMcp(name)) return mcp.callTool(name, args); // MCP servers (see core/mcp.js)
   const fn = name.startsWith('_') ? null : impl[name]; // _helpers are not callable by the model
   if (!fn) return { error: `unknown tool ${name}` };
   try { return await fn(args || {}); } catch (e) { return { error: `${e.name}: ${e.message}` }; }
 }
 
-module.exports = { callTool, SCHEMAS, riskOf, TOOL_NAMES: Object.keys(impl).filter((n) => !n.startsWith('_')), findPython, extras, procs };
+module.exports = { callTool, SCHEMAS, allSchemas: () => SCHEMAS.concat(mcp.schemas()), riskOf, TOOL_NAMES: Object.keys(impl).filter((n) => !n.startsWith('_')), findPython, extras, procs };
