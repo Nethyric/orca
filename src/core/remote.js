@@ -101,10 +101,17 @@ function packaged() { // running from a real build (asar inside an Electron app)
   if (!process.versions.electron) return false;
   try { return !!(process.mainModule && /app\.asar/.test(process.mainModule.filename)) || /app\.asar/.test(__dirname); } catch (_) { return /app\.asar/.test(__dirname); }
 }
+// Pure + testable: which Windows install layout is running — a single-file portable exe,
+// an installed build (NSIS uninstaller next to the exe), or a legacy extracted folder.
+function winKind(env, exeDir, exists) {
+  if (env && env.PORTABLE_EXECUTABLE_FILE_PATH) return 'win-portable-exe';
+  for (const u of ['Uninstall ORCA Agent.exe', 'uninstall.exe']) if (exists(path.join(exeDir, u))) return 'win-nsis';
+  return 'win-portable';
+}
 function installKind() { // how this copy can be replaced
   if (TEST && TEST.kind) return TEST.kind;
   if (!packaged()) return 'dev';
-  if (process.platform === 'win32') return 'win-portable';
+  if (process.platform === 'win32') return winKind(process.env, path.dirname(process.execPath), (f) => fs.existsSync(f));
   if (process.platform === 'darwin') return 'mac-app';
   if (process.env.APPIMAGE) return 'linux-appimage';
   return 'linux-dir';
@@ -116,11 +123,16 @@ function appRoot() { // the folder/bundle/file that gets replaced
   if (process.platform === 'linux' && process.env.APPIMAGE) return process.env.APPIMAGE;
   return path.dirname(exe);
 }
-function pickAsset(assets) {
+function pickAsset(assets, kind) {
+  kind = kind || installKind();
   const arch = process.arch === 'arm64' ? '(arm64|aarch64)' : '(x64|x86_64|amd64)';
-  const prefs = process.platform === 'win32' ? [/win.*x64.*\.zip$/i]
-    : process.platform === 'darwin' ? [new RegExp(`mac.*${arch}.*\\.zip$`, 'i'), new RegExp(`mac.*${arch}.*\\.dmg$`, 'i'), /mac.*\.(zip|dmg)$/i]
-    : (process.env.APPIMAGE ? [new RegExp(`linux.*${arch}.*\\.AppImage$`, 'i'), new RegExp(`linux.*${arch}.*\\.tar\\.gz$`, 'i')] : [new RegExp(`linux.*${arch}.*\\.tar\\.gz$`, 'i'), new RegExp(`linux.*${arch}.*\\.AppImage$`, 'i')]).concat([/linux.*\.(AppImage|zip|tar\.gz)$/i]);
+  let prefs;
+  if (kind === 'win-nsis') prefs = [/ORCA-Setup-.*win.*x64.*\.exe$/i, /setup.*win.*\.exe$/i];
+  else if (kind === 'win-portable-exe') prefs = [/win.*x64.*-portable\.exe$/i, /portable.*\.exe$/i];
+  else if (kind === 'win-portable') prefs = [/win.*x64.*\.zip$/i];
+  else if (kind === 'mac-app') prefs = [new RegExp(`mac.*${arch}.*\\.zip$`, 'i'), new RegExp(`mac.*${arch}.*\\.dmg$`, 'i'), /mac.*\.(zip|dmg)$/i];
+  else if (kind === 'linux-appimage') prefs = [new RegExp(`linux.*${arch}.*\\.AppImage$`, 'i'), new RegExp(`linux.*${arch}.*\\.tar\\.gz$`, 'i')].concat([/linux.*\.(AppImage|zip|tar\.gz)$/i]);
+  else prefs = [new RegExp(`linux.*${arch}.*\\.tar\\.gz$`, 'i'), new RegExp(`linux.*${arch}.*\\.AppImage$`, 'i')].concat([/linux.*\.(AppImage|zip|tar\.gz)$/i]);
   for (const re of prefs) { const a = assets.find((x) => re.test(x.name)); if (a) return a; }
   return null;
 }
@@ -165,7 +177,7 @@ async function checkForUpdates(force = false) {
     const rem = await refreshRemote();
     const rel = await fetchLatestRelease();
     const latest = rel.tag.replace(/^v/, '');
-    const asset = pickAsset(rel.assets);
+    const asset = pickAsset(rel.assets, installKind());
     const sums = rel.assets.find((a) => /SHA256SUMS/i.test(a.name)) || null;
     let notes = rel.notes || '';
     if (!/\n- |\n\* |### /.test(notes) && cmpVer(latest, VERSION) > 0) { // release body is just a compare link → use CHANGELOG.md
@@ -306,7 +318,36 @@ async function applyUpdateOnce(onProgress) {
   const result = (ok, note) => JSON.stringify({ ok, version: pend.version, from: VERSION, note: note || '', at: 0 });
   const relaunchArgs = (process.defaultApp || !process.versions.electron ? [] : process.argv.slice(1)).filter((a) => a && !a.startsWith('--') && !/\.(js|asar)$/i.test(a)); // user args only (a file opened with the app), never our own flags
   try {
-    if (kind === 'dev' || !/\.(zip|AppImage|tar\.gz)$/i.test(pend.zip)) { reveal(pend.zip); installing = { active: false, phase: 'manual', error: '' }; applying = null; return { manual: true, zip: pend.zip, note: 'This copy of ORCA is not a packaged build, so it cannot replace itself. The verified package is in your file manager.' }; }
+    if (kind === 'dev' || !/\.(zip|AppImage|tar\.gz|exe)$/i.test(pend.zip)) { reveal(pend.zip); installing = { active: false, phase: 'manual', error: '' }; applying = null; return { manual: true, zip: pend.zip, note: 'This copy of ORCA is not a packaged build, so it cannot replace itself. The verified package is in your file manager.' }; }
+    if (kind === 'win-portable-exe' || kind === 'win-nsis') {
+      // Single-file installs need no extraction: the portable stub the user launched is not
+      // running (the app runs from its temp extract), and an NSIS build hands over to its own
+      // silent installer, which replaces the install folder and relaunches the app.
+      report('stage');
+      const target = kind === 'win-portable-exe' ? ((TEST && TEST.target) || process.env.PORTABLE_EXECUTABLE_FILE_PATH || exe) : pend.zip;
+      fs.writeFileSync(resultFile, result(true)); // installResult() only trusts it once the version actually moved
+      const waitExit = `$p=${process.pid}; while (Get-Process -Id $p -ErrorAction SilentlyContinue) { Start-Sleep -Milliseconds 300 }`;
+      const ps = kind === 'win-portable-exe'
+        ? [`$ErrorActionPreference='Stop'`, waitExit, `Start-Sleep -Milliseconds 700`,
+           `Move-Item -LiteralPath ${pq(pend.zip)} -Destination ${pq(target)} -Force`,
+           `Remove-Item -LiteralPath ${pq(pendingPath())} -Force -ErrorAction SilentlyContinue`,
+           `Start-Process -FilePath ${pq(target)}`].join('\r\n')
+        : [`$ErrorActionPreference='Stop'`, waitExit, `Start-Sleep -Milliseconds 700`,
+           `Start-Process -FilePath ${pq(pend.zip)} -ArgumentList '/S' -Wait`].join('\r\n');
+      const script = path.join(dir, 'apply-update.ps1'); fs.writeFileSync(script, '\uFEFF' + ps, 'utf8');
+      const psOk = await detach(PS, ['-NoProfile', '-ExecutionPolicy', 'Bypass', ...(process.platform === 'win32' ? ['-WindowStyle', 'Hidden'] : []), '-File', script], { cwd: dir });
+      if (!psOk) { // PowerShell missing/blocked → cmd fallback
+        const cq = (v) => String(v).replace(/["\r\n]/g, '').replace(/%/g, '%%');
+        const bat = [`@echo off`, `:w`, `tasklist /FI "PID eq ${process.pid}" 2>NUL | find "${process.pid}" >NUL && (timeout /t 1 /nobreak >NUL & goto w)`, `timeout /t 1 /nobreak >NUL`]
+          .concat(kind === 'win-portable-exe'
+            ? [`move /y "${cq(pend.zip)}" "${cq(target)}" >NUL`, `del /q "${cq(pendingPath())}" 2>NUL`, `start "" "${cq(target)}"`]
+            : [`start /wait "" "${cq(pend.zip)}" /S`]).join('\r\n');
+        const b = path.join(dir, 'apply-update.cmd'); fs.writeFileSync(b, bat);
+        if (!(await detach((TEST && TEST.cmd) || 'cmd.exe', ['/c', b], { cwd: dir }))) throw new Error('could not start the install helper (PowerShell and cmd both unavailable)');
+      }
+      installing = { active: false, phase: 'restarting', error: '' };
+      return { restarting: true };
+    }
     let stage = path.join(dir, 'stage');
     if (kind !== 'linux-appimage') { // prefer a sibling of the app: same volume, so the final swap is a rename and not a copy
       const sib = path.join(path.dirname(root), '.orca-update-' + process.pid);
@@ -385,4 +426,4 @@ async function applyUpdateOnce(onProgress) {
   } catch (e) { installing = { active: false, phase: 'error', error: e.message }; throw e; }
 }
 
-module.exports = { VERSION, BUILD_INFO, REPO, CHANNEL, APP, installId, refreshRemote, remote, checkForUpdates, updateState, downloadUpdate, downloadState, cancelDownload, applyUpdate, installState, installResult, installKind, appRoot, cmpVer, pickAsset, changelogSection, readPending, MIRRORS, _override };
+module.exports = { VERSION, BUILD_INFO, REPO, CHANNEL, APP, installId, refreshRemote, remote, checkForUpdates, updateState, downloadUpdate, downloadState, cancelDownload, applyUpdate, installState, installResult, installKind, appRoot, cmpVer, pickAsset, winKind, changelogSection, readPending, MIRRORS, _override };

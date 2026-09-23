@@ -50,7 +50,7 @@ ORCA 是一款桌面智能体：它在你的机器上、你的文件里做规划
 
 | 平台 | 文件 | 运行 |
 |---|---|---|
-| Windows 10/11 x64 | `ORCA-Agent-<version>-win-x64.zip` | 解压后运行 `ORCA.exe`（便携版，无需管理员权限） |
+| Windows 10/11 x64 | `ORCA-Setup-<version>-win-x64.exe`（安装程序）或 `ORCA-<version>-win-x64-portable.exe` | 直接运行；SmartScreen → *更多信息* → *仍要运行* |
 | macOS 12+（Apple Silicon） | `ORCA-Agent-<version>-mac-arm64.dmg` / `.zip` | 拖入 Applications；首次启动：右键 → 打开 |
 | macOS 12+（Intel） | `ORCA-Agent-<version>-mac-x64.dmg` / `.zip` | 同上 |
 | Linux x64 | `ORCA-Agent-<version>-linux-x64.AppImage` / `.tar.gz` / `.deb` | `chmod +x` 后运行，或 `sudo apt install ./ORCA-Agent-*.deb` |

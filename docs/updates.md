@@ -30,7 +30,9 @@ The app resolves the newest release through the GitHub API and falls back to the
 
 | Platform | Mechanism |
 |---|---|
-| Windows (portable zip) | the app folder is replaced (PowerShell helper with `cmd` fallback; robocopy when a rename is refused; the previous folder is restored if the swap fails) |
+| Windows (installed, NSIS) | the next `ORCA-Setup-*.exe` is downloaded and run silently (`/S`) after the app exits; the installer replaces the install folder and relaunches the app |
+| Windows (portable exe) | the single portable file replaces itself after exit and relaunches (the launched stub is never locked while the app runs from its temporary extract) |
+| Windows (legacy folder zip) | the app folder is replaced (PowerShell helper with `cmd` fallback; robocopy when a rename is refused; the previous folder is restored if the swap fails) |
 | macOS (`.app` bundle) | the bundle is replaced in place with a built-in zip reader that preserves symlinks and file modes; the quarantine flag is cleared and the app reopens |
 | Linux AppImage | the AppImage file replaces itself and relaunches |
 | Linux tar.gz | the app folder is swapped and relaunched |
@@ -49,7 +51,7 @@ only offered to installs on a matching channel.
 Download the package for your system from [Releases](https://github.com/Nethyric/orca/releases/latest),
 check it against `SHA256SUMS` (`sha256sum -c SHA256SUMS`), and replace your existing installation:
 
-- **Windows** — extract the zip over your current folder (or to a new one), run `ORCA.exe`.
+- **Windows** — run `ORCA-Setup-<version>-win-x64.exe` (per-user installer, no admin rights, folder of your choice) or keep `ORCA-<version>-win-x64-portable.exe` as a single file; the zip remains for automated/legacy installs.
 - **macOS** — drag the app from the `.dmg` (or the `.zip`) to Applications, replacing the old one.
   Builds are not notarized: first launch via right-click → **Open**.
 - **Linux** — `chmod +x` the AppImage and run it, extract the tar.gz, or install the `.deb`

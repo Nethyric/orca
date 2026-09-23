@@ -12,12 +12,13 @@ jobs:
   build:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
         include:
           - name: Windows x64
-            os: ubuntu-latest
+            os: windows-latest
             artifact: win
             target: win
             arch: x64
@@ -63,6 +64,7 @@ jobs:
         run: |
           mkdir -p out
           cp release/ORCA-Agent-*.zip out/ 2>/dev/null || true
+          cp release/ORCA-*.exe out/ 2>/dev/null || true
           cp release/ORCA-Agent-*.dmg out/ 2>/dev/null || true
           cp release/ORCA-Agent-*.AppImage out/ 2>/dev/null || true
           cp release/ORCA-Agent-*.tar.gz out/ 2>/dev/null || true
@@ -78,6 +80,7 @@ jobs:
   publish:
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -88,7 +91,7 @@ jobs:
         run: |
           cd dist
           rm -f SHA256SUMS
-          sha256sum ORCA-Agent-* > SHA256SUMS
+          sha256sum ORCA-* > SHA256SUMS
           cat SHA256SUMS
       - name: Release notes from CHANGELOG.md
         run: |
@@ -112,7 +115,7 @@ jobs:
           name: ORCA ${{ github.ref_name }}
           body_path: dist/RELEASE-NOTES.md
           files: |
-            dist/ORCA-Agent-*
+            dist/ORCA-*
             dist/README-*.txt
             dist/SHA256SUMS
             remote/vault.json

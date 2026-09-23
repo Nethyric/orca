@@ -1,7 +1,7 @@
 {
   "name": "orca-agent",
   "productName": "ORCA Agent",
-  "version": "0.0.9",
+  "version": "0.1.0",
   "description": "ORCA \u2014 autonomous multi-model AI agent for your desktop. Open source by Nethyric.",
   "main": "src/main.js",
   "author": {
@@ -51,18 +51,30 @@
     "win": {
       "target": [
         {
-          "target": "dir",
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
           "arch": [
             "x64"
           ]
         }
       ],
       "icon": "assets/icon.ico",
-      "signAndEditExecutable": false,
+      "signAndEditExecutable": true,
       "artifactName": "ORCA-Agent-${version}-win-${arch}.${ext}"
     },
     "portable": {
-      "artifactName": "ORCA-Agent-${version}-portable.exe"
+      "artifactName": "ORCA-${version}-win-${arch}-portable.${ext}"
     },
     "extraResources": [
       {
@@ -170,7 +182,13 @@
         }
       }
     },
-    "publish": null
+    "publish": null,
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "ORCA-Setup-${version}-win-${arch}.${ext}"
+    }
   },
   "dependencies": {
     "docx": "^9.7.1",

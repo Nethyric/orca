@@ -4,6 +4,15 @@ All notable changes to ORCA are documented here. The format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.1.0] — 2026-09-23
+
+### Added
+- **Windows installer and single-file portable build.** Releases now ship `ORCA-Setup-<version>-win-x64.exe` (per-user NSIS installer, install folder of your choice) and `ORCA-<version>-win-x64-portable.exe` (one file, runs from anywhere), next to the zip for automated and legacy installs.
+- **Kind-aware self-update on Windows.** Installed builds download the next installer and apply it silently on restart; the portable exe replaces its own file and relaunches; legacy folder installs keep the proven folder swap. Every path remains SHA-256 verified against `SHA256SUMS`.
+
+### Changed
+- Windows packages are built on a native Windows runner, so icons and version resources are embedded by the toolchain itself. macOS and Linux pipelines are unchanged.
+
 ## [0.0.9] — 2026-09-23
 
 ### Added

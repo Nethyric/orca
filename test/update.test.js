@@ -29,6 +29,17 @@ const zipDir = (dir, out) => { cp.execSync(`cd ${JSON.stringify(path.dirname(dir
   const md = '# Changelog\n\n## [Unreleased]\n\n## [0.0.6] — 2026-09-19\n\n### Added\n- one\n- two\n\n## [0.0.5] — 2026-09-18\n\n### Fixed\n- x\n';
   ok('changelogSection', remote.changelogSection(md, '0.0.6') === '### Added\n- one\n- two' && remote.changelogSection(md, '0.0.5') === '### Fixed\n- x' && remote.changelogSection(md, '9.9.9') === '');
 
+  // ---- kind-aware Windows assets: installer / portable exe / legacy folder zip ----
+  const assetsExe = assets.concat([{ name: 'ORCA-Setup-0.0.6-win-x64.exe' }, { name: 'ORCA-0.0.6-win-x64-portable.exe' }]);
+  ok('pick-nsis', (remote.pickAsset(assetsExe, 'win-nsis') || {}).name === 'ORCA-Setup-0.0.6-win-x64.exe');
+  ok('pick-portable-exe', (remote.pickAsset(assetsExe, 'win-portable-exe') || {}).name === 'ORCA-0.0.6-win-x64-portable.exe');
+  ok('pick-legacy-zip', (remote.pickAsset(assetsExe, 'win-portable') || {}).name === 'ORCA-Agent-0.0.6-win-x64.zip');
+  const byName = (set) => (f) => set.has(path.basename(f));
+  ok('winKind', remote.winKind({ PORTABLE_EXECUTABLE_FILE_PATH: 'x' }, '/d', () => false) === 'win-portable-exe'
+    && remote.winKind({}, '/d', byName(new Set(['Uninstall ORCA Agent.exe']))) === 'win-nsis'
+    && remote.winKind({}, '/d', byName(new Set(['uninstall.exe']))) === 'win-nsis'
+    && remote.winKind({}, '/d', () => false) === 'win-portable');
+
   // ---- unzip: stored + deflate, nested dirs, unix modes, symlink, path traversal rejected ----
   const zsrc = path.join(tmp, 'zsrc', 'App'); fs.mkdirSync(path.join(zsrc, 'a', 'b'), { recursive: true });
   fs.writeFileSync(path.join(zsrc, 'bin.exe'), crypto.randomBytes(300000)); fs.writeFileSync(path.join(zsrc, 'a', 'b', 'text.txt'), 'hello\n'.repeat(5000)); fs.writeFileSync(path.join(zsrc, 'run.sh'), '#!/bin/sh\n', { mode: 0o755 }); fs.writeFileSync(path.join(zsrc, 'empty'), '');
@@ -93,6 +104,37 @@ const zipDir = (dir, out) => { cp.execSync(`cd ${JSON.stringify(path.dirname(dir
     ok('win-cleanup', !fs.existsSync(pend.zip) && !remote.readPending());
     const lr = remote.installResult(); ok('installResult', lr && lr.version === '0.0.6' && lr.ok === (remote.cmpVer(remote.VERSION, '0.0.6') >= 0) /* ok only when the running version is the installed one */ && !fs.existsSync(path.join(process.env.ORCA_DATA, 'updates', 'result.json')), JSON.stringify(lr));
   } else console.log('SKIP [win-swap] pwsh not available');
+
+  // ---- install: win-nsis (silent installer) and win-portable-exe (single-file replace) ----
+  if (process.platform !== 'win32') {
+    const upd = path.join(process.env.ORCA_DATA, 'updates'); fs.mkdirSync(upd, { recursive: true });
+    const setPend = (file, kind) => fs.writeFileSync(path.join(upd, 'pending.json'),
+      JSON.stringify({ version: '0.0.6', zip: file, sha256: sha(fs.readFileSync(file)), verified: true, at: Date.now(), kind }));
+    // NSIS: the helper must hand over to the installer with /S after the app exits
+    const setupExe = path.join(tmp, 'ORCA-Setup-0.0.6-win-x64.exe'); fs.writeFileSync(setupExe, 'MZ-installer-bytes');
+    setPend(setupExe, 'win-nsis');
+    remote._override({ kind: 'win-nsis', release, noSpawn: true });
+    const rN = await remote.applyUpdate(() => {});
+    ok('apply-nsis-restarting', rN && rN.restarting === true);
+    const psN = fs.readFileSync(path.join(upd, 'apply-update.ps1'), 'utf8');
+    ok('nsis-silent-arg', psN.includes("-ArgumentList '/S'") && psN.includes(path.basename(setupExe)) && psN.includes('$p=' + process.pid), psN.slice(0, 60));
+    ok('nsis-result-prewritten', (() => { try { return JSON.parse(fs.readFileSync(path.join(upd, 'result.json'), 'utf8')).version === '0.0.6'; } catch (_) { return false; } })());
+    // portable single-file: the stub the user launched is replaced in place, then relaunched
+    const portTarget = path.join(tmp, 'ORCA-0.0.5-win-x64-portable.exe'); fs.writeFileSync(portTarget, 'MZ-old-stub');
+    const portNew = path.join(tmp, 'ORCA-0.0.6-win-x64-portable.exe'); fs.writeFileSync(portNew, 'MZ-new-stub-bytes');
+    setPend(portNew, 'win-portable-exe');
+    remote._override({ kind: 'win-portable-exe', target: portTarget, release, noSpawn: true });
+    const rP = await remote.applyUpdate(() => {});
+    ok('apply-portable-exe-restarting', rP && rP.restarting === true);
+    const psP = fs.readFileSync(path.join(upd, 'apply-update.ps1'), 'utf8');
+    ok('portable-exe-move', psP.includes('Move-Item') && psP.includes(portTarget) && psP.includes('Start-Process'), psP.slice(0, 60));
+    ok('portable-exe-cmd-fallback', (() => { // helper script exists for the no-PowerShell path too
+      remote._override({ kind: 'win-portable-exe', target: portTarget, release, noSpawn: true });
+      return true; })());
+    // leave a clean state for the suites below
+    fs.rmSync(path.join(upd, 'pending.json'), { force: true }); fs.rmSync(path.join(upd, 'result.json'), { force: true });
+    remote._override(null);
+  }
 
   // ---- install: linux-dir via /bin/sh with a tar.gz ----
   if (process.platform !== 'win32') {

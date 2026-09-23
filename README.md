@@ -51,12 +51,12 @@ Download the build for your system from [Releases](https://github.com/Nethyric/o
 
 | Platform | File | Run |
 |---|---|---|
-| Windows 10/11 x64 | `ORCA-Agent-<version>-win-x64.zip` | extract, run `ORCA.exe` (portable, no admin rights) |
+| Windows 10/11 x64 | `ORCA-Setup-<version>-win-x64.exe` (installer) or `ORCA-<version>-win-x64-portable.exe` | run it; SmartScreen → *More info* → *Run anyway* |
 | macOS 12+ (Apple Silicon) | `ORCA-Agent-<version>-mac-arm64.dmg` / `.zip` | drag to Applications; first launch: right-click → Open |
 | macOS 12+ (Intel) | `ORCA-Agent-<version>-mac-x64.dmg` / `.zip` | same |
 | Linux x64 | `ORCA-Agent-<version>-linux-x64.AppImage` / `.tar.gz` / `.deb` | `chmod +x` and run, or `sudo apt install ./ORCA-Agent-*.deb` |
 
-Builds are not code-signed; `SHA256SUMS` is attached to every release. The app updates itself: it checks the release channel, downloads the package for your OS/CPU in the background (resumable, mirrors when GitHub is blocked), verifies the SHA-256 and installs it on restart — no browser needed (Settings → Updates).
+Builds are not code-signed; `SHA256SUMS` is attached to every release. The app updates itself: it checks the release channel, downloads the package for your OS/CPU in the background (resumable, mirrors when GitHub is blocked), verifies the SHA-256 and installs it on restart — no browser needed (Settings → Updates). Installed Windows builds update through a silent installer, the portable exe replaces its own file, and packaged macOS/Linux builds swap themselves in place.
 
 **From source** (Windows, macOS, Linux):
 

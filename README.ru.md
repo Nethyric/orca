@@ -50,7 +50,7 @@ ORCA — настольный агент, который планирует, п�
 
 | Платформа | Файл | Запуск |
 |---|---|---|
-| Windows 10/11 x64 | `ORCA-Agent-<version>-win-x64.zip` | распакуйте и запустите `ORCA.exe` (портативно, без прав администратора) |
+| Windows 10/11 x64 | `ORCA-Setup-<version>-win-x64.exe` (установщик) или `ORCA-<version>-win-x64-portable.exe` | запустите; SmartScreen → *Дополнительно* → *Выполнить всё равно* |
 | macOS 12+ (Apple Silicon) | `ORCA-Agent-<version>-mac-arm64.dmg` / `.zip` | перетащите в Applications; первый запуск: правый клик → Открыть |
 | macOS 12+ (Intel) | `ORCA-Agent-<version>-mac-x64.dmg` / `.zip` | то же самое |
 | Linux x64 | `ORCA-Agent-<version>-linux-x64.AppImage` / `.tar.gz` / `.deb` | `chmod +x` и запустите, или `sudo apt install ./ORCA-Agent-*.deb` |
